@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Freeze Concierge</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="background-orb orb-one"></div>
+    <div class="background-orb orb-two"></div>
+    <div class="background-grid"></div>
+
+    <main class="shell">
+      <section class="hero card">
+        <div>
+          <p class="eyebrow">Smart membership operations</p>
+          <h1>Freeze Concierge</h1>
+          <p class="lede">
+            A modern membership-freeze console that verifies member details, looks up active memberships,
+            checks freeze allowances, and schedules the freeze in a guided flow.
+          </p>
+        </div>
+        <div class="hero-stats">
+          <div>
+            <span class="stat-label">Lookup flow</span>
+            <strong>Email → member → memberships</strong>
+          </div>
+          <div>
+            <span class="stat-label">Freeze logic</span>
+            <strong>Policy, attempts, and total days</strong>
+          </div>
+          <div>
+            <span class="stat-label">Execution</span>
+            <strong>Scheduled freeze with automatic token refresh</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace-grid">
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Step 1</p>
+              <h2>Find member account</h2>
+            </div>
+            <span class="badge badge-soft">Secure server-side lookup</span>
+          </div>
+
+          <form id="lookup-form" class="form-grid">
+            <label>
+              <span>First name</span>
+              <input id="firstName" name="firstName" type="text" placeholder="John" required />
+            </label>
+
+            <label>
+              <span>Last name</span>
+              <input id="lastName" name="lastName" type="text" placeholder="Doe" required />
+            </label>
+
+            <label>
+              <span>Country code</span>
+              <input id="countryCode" name="countryCode" type="text" placeholder="+91" required />
+            </label>
+
+            <label>
+              <span>Phone number</span>
+              <input id="phoneNumber" name="phoneNumber" type="tel" placeholder="9876543210" required />
+            </label>
+
+            <label class="full-width">
+              <span>Email address</span>
+              <input id="email" name="email" type="email" placeholder="member@example.com" required />
+            </label>
+
+            <div class="full-width form-actions">
+              <button id="lookup-button" type="submit" class="button button-primary">Find memberships</button>
+              <p class="helper-text">
+                The email is used for the Momence member lookup. Name and phone are shown back for a quick confidence check.
+              </p>
+            </div>
+          </form>
+        </section>
+
+        <aside class="card side-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">What this app does</p>
+              <h2>Flow overview</h2>
+            </div>
+          </div>
+
+          <ol class="timeline">
+            <li>Authenticates server-side with Momence and refreshes tokens before use.</li>
+            <li>Looks up the member by email and fetches full member details.</li>
+            <li>Lists active memberships and evaluates freeze eligibility per policy.</li>
+            <li>Lets the member choose dates and schedules a freeze if allowed.</li>
+          </ol>
+
+          <div class="tip-box">
+            <strong>Heads up</strong>
+            <p>
+              Historical freeze usage is most accurate when the optional history endpoint configuration is enabled on the server.
+            </p>
+          </div>
+        </aside>
+      </section>
+
+      <section id="feedback-banner" class="feedback-banner hidden" aria-live="polite"></section>
+
+      <section id="member-section" class="card hidden">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Step 2</p>
+            <h2>Member and verification summary</h2>
+          </div>
+          <span id="verification-pill" class="badge">Awaiting lookup</span>
+        </div>
+        <div id="member-summary" class="member-summary"></div>
+      </section>
+
+      <section id="memberships-section" class="card hidden">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Step 3</p>
+            <h2>Choose a membership to freeze</h2>
+          </div>
+          <span id="membership-count" class="badge badge-soft">0 memberships</span>
+        </div>
+        <div id="memberships-grid" class="membership-grid"></div>
+      </section>
+
+      <section id="scheduler-section" class="card hidden">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Step 4</p>
+            <h2>Schedule freeze window</h2>
+          </div>
+          <span class="badge badge-soft">Date picker ready</span>
+        </div>
+
+        <div id="selected-membership-summary" class="selected-membership-summary"></div>
+
+        <form id="freeze-form" class="freeze-form">
+          <label>
+            <span>Freeze start date</span>
+            <input id="startDate" name="startDate" type="date" required />
+          </label>
+
+          <label>
+            <span>Freeze end date</span>
+            <input id="endDate" name="endDate" type="date" required />
+          </label>
+
+          <div class="full-width form-actions compact">
+            <button id="freeze-button" type="submit" class="button button-primary">Freeze membership</button>
+            <p id="freeze-hint" class="helper-text">Choose a membership above to unlock scheduling.</p>
+          </div>
+        </form>
+      </section>
+
+      <section id="success-section" class="card success-card hidden">
+        <p class="eyebrow">All done</p>
+        <h2>Membership freeze scheduled successfully</h2>
+        <p id="success-message" class="success-message"></p>
+        <div id="success-details" class="success-details"></div>
+        <div class="goodbye">Goodbye, and have a wonderful day ✨</div>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

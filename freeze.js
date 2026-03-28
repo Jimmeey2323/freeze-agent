@@ -1,0 +1,793 @@
+import 'dotenv/config';
+import express from 'express';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ENV_FILE_PATH = path.join(__dirname, '.env');
+
+const app = express();
+const PORT = Number(process.env.PORT || 3000);
+const IS_VERCEL = Boolean(process.env.VERCEL);
+const HOST_ID = String(process.env.MOMENCE_HOST_ID || '13752');
+const MOMENCE_API_BASE = 'https://api.momence.com/api/v2';
+const AUTHORIZE_URL = `${MOMENCE_API_BASE}/auth/authorize`;
+const TOKEN_URL = `${MOMENCE_API_BASE}/auth/token`;
+const TOKEN_REFRESH_SKEW_MS = 60_000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+const MOMENCE_CLIENT_ID = process.env.MOMENCE_CLIENT_ID || '';
+const MOMENCE_CLIENT_SECRET = process.env.MOMENCE_CLIENT_SECRET || '';
+const MOMENCE_REDIRECT_URI = process.env.MOMENCE_REDIRECT_URI || process.env.MOMENCE_REDIRECT_URL || '';
+const MOMENCE_SCOPE = process.env.MOMENCE_SCOPE || 'public-api-v2';
+let currentMomenceBasicAuth = process.env.MOMENCE_BASIC_AUTH || '';
+const MOMENCE_API_USERNAME = process.env.MOMENCE_API_USERNAME || process.env.MOMENCE_USER_EMAIL || '';
+const MOMENCE_API_PASSWORD = process.env.MOMENCE_API_PASSWORD || process.env.MOMENCE_USER_PASSWORD || '';
+const MOMENCE_X_APP = process.env.MOMENCE_X_APP || '';
+const MOMENCE_HISTORY_COOKIE = process.env.MOMENCE_HISTORY_COOKIE || '';
+const MOMENCE_USE_HISTORY_ENDPOINT = process.env.MOMENCE_USE_HISTORY_ENDPOINT === 'true';
+
+const tokenStore = {
+  accessToken: process.env.MOMENCE_ACCESS_TOKEN || '',
+  refreshToken: process.env.MOMENCE_REFRESH_TOKEN || '',
+  expiresAt: Number(process.env.MOMENCE_ACCESS_TOKEN_EXPIRES_AT || 0),
+};
+
+const FREEZE_POLICY_ROWS = [
+  ['Barre 1 month Unlimited', 1, 30],
+  ['Barre 2 week Unlimited', 0, 14],
+  ['Barre 3 months Unlimited', 3, 90],
+  ['Barre 6 month Unlimited', 6, 180],
+  ['Barre Annual Membership', 12, 365],
+  ['powerCycle 1 month Unlimited', 1, 30],
+  ['powerCycle 2 week Unlimited', 0, 14],
+  ['powerCycle 3 months Unlimited', 3, 90],
+  ['powerCycle 6 months Unlimited', 6, 180],
+  ['powerCycle Annual Membership', 12, 365],
+  ['Strength Lab 1 month Unlimited', 1, 30],
+  ['Strength Lab 2 week Unlimited', 0, 14],
+  ['Strength Lab 3 months Unlimited', 3, 90],
+  ['Strength Lab 6 months Unlimited', 6, 180],
+  ['Strength Lab Annual Membership', 12, 365],
+  ['Studio 1 Month Unlimited Membership', 1, 30],
+  ['Studio 10 Single Class Pack', 2, 70],
+  ['Studio 12 Class Package', 2, 45],
+  ['Studio 2 Week Unlimited Membership', 0, 14],
+  ['Studio 20 Single Class Pack', 4, 105],
+  ['Studio 3 Month U/L Monthly Installment', 1, 30],
+  ['Studio 3 Month Unlimited Membership', 3, 90],
+  ['Studio 30 Single Class Pack', 5, 140],
+  ['Studio 4 Class Package', 0, 14],
+  ['Studio 6 Month Unlimited Membership', 6, 180],
+  ['Studio 8 Class Package', 1, 30],
+  ['Studio Annual Membership - Monthly Intsallment', 1, 30],
+  ['Studio Annual Unlimited Membership', 12, 365],
+  ['Studio Extended 10 Single Class Pack', 3, 90],
+  ['Studio Happy Hour Private', 0, 7],
+  ['Studio Newcomers 2 Week Unlimited Membership', 0, 14],
+  ['Studio Private - Anisha (Single Class)', 0, 7],
+  ['Studio Private Class', 0, 7],
+  ['Studio Private Class X 10', 2, 70],
+  ['Studio Privates - Anisha x 10', 2, 70],
+  ['Summer Bootcamp - Studio 6 Week Unlimited', 1, 42],
+  ['Virtual Private - Anisha', 0, 7],
+  ['Virtual Private Class', 0, 7],
+  ['Virtual Private Class X 10', 2, 70],
+  ['Virtual Privates - Anisha x 10', 17, 500],
+];
+
+const FREEZE_POLICY_MAP = new Map(
+  FREEZE_POLICY_ROWS.map(([name, attempts, days]) => [normalizeMembershipName(name), { name, attempts, days }]),
+);
+
+app.use(express.json({ limit: '1mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+function normalizeMembershipName(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[–—]/g, '-')
+    .replace(/\s+/g, ' ');
+}
+
+function normalizeText(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizePhone(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function escapeEnvValue(value) {
+  return String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+
+async function upsertEnvValues(entries) {
+  let envContents = '';
+
+  try {
+    envContents = await fs.readFile(ENV_FILE_PATH, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  let updatedContents = envContents;
+
+  for (const [key, rawValue] of Object.entries(entries)) {
+    const nextLine = `${key}="${escapeEnvValue(rawValue)}"`;
+    const keyPattern = new RegExp(`^${key}=.*$`, 'm');
+
+    if (keyPattern.test(updatedContents)) {
+      updatedContents = updatedContents.replace(keyPattern, nextLine);
+    } else {
+      if (updatedContents.length > 0 && !updatedContents.endsWith('\n')) {
+        updatedContents += '\n';
+      }
+      updatedContents += `${nextLine}\n`;
+    }
+  }
+
+  if (updatedContents !== envContents) {
+    await fs.writeFile(ENV_FILE_PATH, updatedContents, 'utf8');
+  }
+}
+
+function normalizeBasicAuthValue(value) {
+  if (!value) return '';
+  return value.startsWith('Basic ') ? value : `Basic ${value}`;
+}
+
+function isPlaceholderBasicAuth(value) {
+  return !value || /base64\(client_id:client_secret\)/i.test(value);
+}
+
+function deriveBasicAuthorizationHeader() {
+  if (!MOMENCE_CLIENT_ID || !MOMENCE_CLIENT_SECRET) {
+    return '';
+  }
+
+  const encoded = Buffer.from(`${MOMENCE_CLIENT_ID}:${MOMENCE_CLIENT_SECRET}`, 'utf8').toString('base64');
+  return `Basic ${encoded}`;
+}
+
+async function ensureBasicAuthorizationHeader() {
+  if (isPlaceholderBasicAuth(currentMomenceBasicAuth)) {
+    const derivedBasicAuth = deriveBasicAuthorizationHeader();
+    if (!derivedBasicAuth) {
+      throw createHttpError(500, 'Missing MOMENCE_BASIC_AUTH and unable to derive it because MOMENCE_CLIENT_ID or MOMENCE_CLIENT_SECRET is missing.');
+    }
+
+    currentMomenceBasicAuth = derivedBasicAuth;
+    process.env.MOMENCE_BASIC_AUTH = derivedBasicAuth;
+    await upsertEnvValues({ MOMENCE_BASIC_AUTH: derivedBasicAuth });
+  }
+
+  return normalizeBasicAuthValue(currentMomenceBasicAuth);
+}
+
+function createHttpError(status, message, details) {
+  const error = new Error(message);
+  error.status = status;
+  error.details = details;
+  return error;
+}
+
+function isValidAbsoluteUrl(value) {
+  if (!value) return false;
+
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function getMissingMomenceConfig() {
+  const missing = [];
+
+  if (isPlaceholderBasicAuth(currentMomenceBasicAuth) && (!MOMENCE_CLIENT_ID || !MOMENCE_CLIENT_SECRET)) {
+    missing.push('MOMENCE_BASIC_AUTH or MOMENCE_CLIENT_ID + MOMENCE_CLIENT_SECRET');
+  }
+  if (!MOMENCE_API_USERNAME) missing.push('MOMENCE_API_USERNAME (or MOMENCE_USER_EMAIL)');
+  if (!MOMENCE_API_PASSWORD) missing.push('MOMENCE_API_PASSWORD');
+
+  return missing;
+}
+
+async function parseResponse(response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return response.json();
+  }
+
+  const text = await response.text();
+  return text ? { raw: text } : {};
+}
+
+async function warmAuthorizeFlow() {
+  if (!MOMENCE_CLIENT_ID || !MOMENCE_REDIRECT_URI) {
+    return;
+  }
+
+  if (!isValidAbsoluteUrl(MOMENCE_REDIRECT_URI)) {
+    console.warn(`Skipping authorize warm-up because MOMENCE_REDIRECT_URI is not a valid absolute URL: ${MOMENCE_REDIRECT_URI}`);
+    return;
+  }
+
+  const url = new URL(AUTHORIZE_URL);
+  url.searchParams.set('client_id', MOMENCE_CLIENT_ID);
+  url.searchParams.set('redirect_uri', MOMENCE_REDIRECT_URI);
+  url.searchParams.set('prompt', 'login');
+  url.searchParams.set('scope', MOMENCE_SCOPE);
+  url.searchParams.set('response_type', 'code');
+
+  try {
+    const basicAuthorizationHeader = await ensureBasicAuthorizationHeader();
+    await fetch(url, {
+      method: 'GET',
+      headers: {
+        authorization: basicAuthorizationHeader,
+      },
+      redirect: 'manual',
+    });
+  } catch {
+    // Best-effort preflight only.
+  }
+}
+
+async function requestToken(bodyParams) {
+  const basicAuthorizationHeader = await ensureBasicAuthorizationHeader();
+
+  const response = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      authorization: basicAuthorizationHeader,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams(bodyParams),
+  });
+
+  const data = await parseResponse(response);
+  if (!response.ok) {
+    throw createHttpError(response.status, 'Momence token request failed.', data);
+  }
+
+  const accessToken = data.access_token || data.accessToken;
+  const refreshToken = data.refresh_token || data.refreshToken;
+  const expiresIn = Number(data.expires_in || data.expiresIn || 3600);
+
+  if (!accessToken) {
+    throw createHttpError(502, 'Momence token response did not include an access token.', data);
+  }
+
+  tokenStore.accessToken = accessToken;
+  tokenStore.refreshToken = refreshToken || tokenStore.refreshToken;
+  tokenStore.expiresAt = Date.now() + expiresIn * 1000;
+
+  process.env.MOMENCE_ACCESS_TOKEN = tokenStore.accessToken;
+  process.env.MOMENCE_REFRESH_TOKEN = tokenStore.refreshToken;
+  process.env.MOMENCE_ACCESS_TOKEN_EXPIRES_AT = String(tokenStore.expiresAt);
+
+  await upsertEnvValues({
+    MOMENCE_BASIC_AUTH: basicAuthorizationHeader,
+    MOMENCE_ACCESS_TOKEN: tokenStore.accessToken,
+    MOMENCE_REFRESH_TOKEN: tokenStore.refreshToken,
+    MOMENCE_ACCESS_TOKEN_EXPIRES_AT: String(tokenStore.expiresAt),
+    LAST_AUTH_TIMESTAMP: new Date().toISOString(),
+    AUTH_SUCCESS: 'true',
+  });
+
+  return tokenStore.accessToken;
+}
+
+async function loginWithPasswordGrant() {
+  const missingConfig = getMissingMomenceConfig();
+  if (missingConfig.length > 0) {
+    throw createHttpError(500, `Missing Momence environment configuration: ${missingConfig.join(', ')}.`, {
+      missingConfig,
+    });
+  }
+
+  await warmAuthorizeFlow();
+
+  return requestToken({
+    grant_type: 'password',
+    username: MOMENCE_API_USERNAME,
+    password: MOMENCE_API_PASSWORD,
+  });
+}
+
+async function refreshAccessToken() {
+  if (!tokenStore.refreshToken) {
+    return loginWithPasswordGrant();
+  }
+
+  return requestToken({
+    grant_type: 'refresh_token',
+    refresh_token: tokenStore.refreshToken,
+  });
+}
+
+async function ensureAccessToken({ forceRefresh = false } = {}) {
+  const shouldRefresh =
+    forceRefresh ||
+    !tokenStore.accessToken ||
+    !tokenStore.expiresAt ||
+    Date.now() + TOKEN_REFRESH_SKEW_MS >= tokenStore.expiresAt;
+
+  if (!shouldRefresh) {
+    return tokenStore.accessToken;
+  }
+
+  if (tokenStore.refreshToken && !forceRefresh) {
+    try {
+      return await refreshAccessToken();
+    } catch {
+      return loginWithPasswordGrant();
+    }
+  }
+
+  return loginWithPasswordGrant();
+}
+
+async function momenceRequest(pathname, init = {}, retry = true) {
+  const accessToken = await ensureAccessToken();
+  const url = pathname.startsWith('http') ? pathname : `${MOMENCE_API_BASE}${pathname}`;
+
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      accept: 'application/json',
+      ...(init.headers || {}),
+      authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if ((response.status === 401 || response.status === 403) && retry) {
+    await ensureAccessToken({ forceRefresh: true });
+    return momenceRequest(pathname, init, false);
+  }
+
+  const data = await parseResponse(response);
+  if (!response.ok) {
+    throw createHttpError(response.status, 'Momence API request failed.', data);
+  }
+
+  return data;
+}
+
+function getFreezePolicy(membershipName) {
+  return FREEZE_POLICY_MAP.get(normalizeMembershipName(membershipName)) || null;
+}
+
+function calculateRequestedFreezeDays(startDate, endDate) {
+  const start = Date.parse(`${startDate}T00:00:00.000Z`);
+  const endExclusive = Date.parse(`${endDate}T00:00:00.000Z`) + MS_PER_DAY;
+
+  if (!Number.isFinite(start) || !Number.isFinite(endExclusive)) {
+    throw createHttpError(400, 'Please choose valid freeze start and end dates.');
+  }
+
+  if (endExclusive <= start) {
+    throw createHttpError(400, 'Freeze end date must be the same day or later than the start date.');
+  }
+
+  return Math.ceil((endExclusive - start) / MS_PER_DAY);
+}
+
+function toScheduledFreezeWindow(startDate, endDate) {
+  return {
+    freezeAt: new Date(`${startDate}T00:00:00.000Z`).toISOString(),
+    unfreezeAt: new Date(`${endDate}T23:59:59.999Z`).toISOString(),
+  };
+}
+
+function buildCurrentFreezeFallback(membership) {
+  const freeze = membership.freeze || {};
+  const freezeStart = freeze.freezedAt || freeze.scheduledFreezeAt;
+  const freezeEnd = freeze.unfrozenAt || freeze.unfreezedScheduledAt;
+
+  if (!freezeStart) {
+    return {
+      available: false,
+      source: 'active-membership-fallback',
+      attemptsUsed: 0,
+      frozenDaysUsed: 0,
+      intervals: [],
+      note: 'Historical freeze usage is unavailable from the active-membership response alone.',
+    };
+  }
+
+  const startMs = Date.parse(freezeStart);
+  const endMs = Date.parse(freezeEnd || new Date().toISOString());
+  const frozenDaysUsed = Number.isFinite(startMs) && Number.isFinite(endMs)
+    ? Math.max(0, Math.ceil((endMs - startMs) / MS_PER_DAY))
+    : 0;
+
+  return {
+    available: true,
+    source: 'active-membership-fallback',
+    attemptsUsed: 1,
+    frozenDaysUsed,
+    intervals: [{ freezeAt: freezeStart, unfreezeAt: freezeEnd || null }],
+    note: 'Using current membership freeze data as a fallback because full history is not configured.',
+  };
+}
+
+function summarizeFreezeHistory(historyEntries, boughtMembershipId) {
+  const events = [];
+
+  for (const entry of historyEntries) {
+    if (String(entry?.boughtMembershipId || '') !== String(boughtMembershipId)) {
+      continue;
+    }
+
+    for (const activity of entry.activities || []) {
+      if (activity.type === 'bought-membership-freezed') {
+        events.push({ type: 'freeze', at: activity.createdAt });
+      }
+      if (activity.type === 'bought-membership-unfreezed') {
+        events.push({ type: 'unfreeze', at: activity.createdAt });
+      }
+    }
+  }
+
+  events.sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+
+  let attemptsUsed = 0;
+  let frozenDaysUsed = 0;
+  let openFreezeAt = null;
+  const intervals = [];
+
+  for (const event of events) {
+    const eventMs = Date.parse(event.at);
+    if (!Number.isFinite(eventMs)) {
+      continue;
+    }
+
+    if (event.type === 'freeze' && openFreezeAt === null) {
+      attemptsUsed += 1;
+      openFreezeAt = eventMs;
+      continue;
+    }
+
+    if (event.type === 'unfreeze' && openFreezeAt !== null) {
+      frozenDaysUsed += Math.max(0, Math.ceil((eventMs - openFreezeAt) / MS_PER_DAY));
+      intervals.push({
+        freezeAt: new Date(openFreezeAt).toISOString(),
+        unfreezeAt: new Date(eventMs).toISOString(),
+      });
+      openFreezeAt = null;
+    }
+  }
+
+  if (openFreezeAt !== null) {
+    frozenDaysUsed += Math.max(0, Math.ceil((Date.now() - openFreezeAt) / MS_PER_DAY));
+    intervals.push({
+      freezeAt: new Date(openFreezeAt).toISOString(),
+      unfreezeAt: null,
+    });
+  }
+
+  return {
+    available: true,
+    source: 'history-endpoint',
+    attemptsUsed,
+    frozenDaysUsed,
+    intervals,
+  };
+}
+
+async function getFreezeUsageSummary(memberId, membership) {
+  if (!MOMENCE_USE_HISTORY_ENDPOINT) {
+    return buildCurrentFreezeFallback(membership);
+  }
+
+  try {
+    const accessToken = await ensureAccessToken();
+    const historyUrl = `https://api.momence.com/host/${HOST_ID}/customers/${memberId}/history`;
+    const response = await fetch(historyUrl, {
+      method: 'GET',
+      headers: {
+        accept: 'application/json',
+        authorization: `Bearer ${accessToken}`,
+        ...(MOMENCE_X_APP ? { 'x-app': MOMENCE_X_APP } : {}),
+        ...(MOMENCE_HISTORY_COOKIE ? { cookie: MOMENCE_HISTORY_COOKIE } : {}),
+      },
+    });
+
+    const data = await parseResponse(response);
+    if (!response.ok || !Array.isArray(data)) {
+      return buildCurrentFreezeFallback(membership);
+    }
+
+    return summarizeFreezeHistory(data, membership.id);
+  } catch {
+    return buildCurrentFreezeFallback(membership);
+  }
+}
+
+function evaluateFreezeEligibility({ membership, policy, usage, requestedDays = null }) {
+  if (!policy) {
+    return {
+      eligible: false,
+      reason: 'This membership does not have a configured freeze policy.',
+      attemptsRemaining: 0,
+      daysRemaining: 0,
+    };
+  }
+
+  if (policy.attempts <= 0 || policy.days <= 0) {
+    return {
+      eligible: false,
+      reason: 'This membership is configured with no freeze allowance.',
+      attemptsRemaining: 0,
+      daysRemaining: 0,
+    };
+  }
+
+  if (membership.isFrozen) {
+    return {
+      eligible: false,
+      reason: 'This membership is already frozen.',
+      attemptsRemaining: Math.max(policy.attempts - usage.attemptsUsed, 0),
+      daysRemaining: Math.max(policy.days - usage.frozenDaysUsed, 0),
+    };
+  }
+
+  const attemptsRemaining = Math.max(policy.attempts - usage.attemptsUsed, 0);
+  const daysRemaining = Math.max(policy.days - usage.frozenDaysUsed, 0);
+
+  if (attemptsRemaining <= 0) {
+    return {
+      eligible: false,
+      reason: 'The freeze-attempt limit for this membership has already been reached.',
+      attemptsRemaining,
+      daysRemaining,
+    };
+  }
+
+  if (daysRemaining <= 0) {
+    return {
+      eligible: false,
+      reason: 'The total freeze-day limit for this membership has already been reached.',
+      attemptsRemaining,
+      daysRemaining,
+    };
+  }
+
+  if (requestedDays !== null && requestedDays > daysRemaining) {
+    return {
+      eligible: false,
+      reason: `Requested freeze duration exceeds the remaining allowance of ${daysRemaining} day(s).`,
+      attemptsRemaining,
+      daysRemaining,
+    };
+  }
+
+  return {
+    eligible: true,
+    reason: 'This membership is eligible for a scheduled freeze.',
+    attemptsRemaining,
+    daysRemaining,
+  };
+}
+
+function buildVerificationSummary(submitted, member) {
+  const submittedPhone = normalizePhone(`${submitted.countryCode || ''}${submitted.phoneNumber || ''}`);
+  const memberPhone = normalizePhone(member.phoneNumber);
+
+  const firstNameMatches = normalizeText(submitted.firstName) === normalizeText(member.firstName);
+  const lastNameMatches = normalizeText(submitted.lastName) === normalizeText(member.lastName);
+  const phoneMatches = !submittedPhone || !memberPhone
+    ? false
+    : memberPhone.endsWith(submittedPhone) || submittedPhone.endsWith(memberPhone);
+
+  return {
+    firstNameMatches,
+    lastNameMatches,
+    phoneMatches,
+    matchedFields: [firstNameMatches, lastNameMatches, phoneMatches].filter(Boolean).length,
+  };
+}
+
+function serializeMembership(membership, usage) {
+  const policy = getFreezePolicy(membership.membership?.name);
+  const eligibility = evaluateFreezeEligibility({ membership, policy, usage });
+
+  return {
+    id: membership.id,
+    type: membership.type,
+    startDate: membership.startDate,
+    endDate: membership.endDate,
+    isFrozen: membership.isFrozen,
+    usageLimitForSessions: membership.usageLimitForSessions,
+    usageLimitForAppointments: membership.usageLimitForAppointments,
+    usedSessions: membership.usedSessions,
+    usedAppointments: membership.usedAppointments,
+    freeze: membership.freeze || null,
+    membership: {
+      id: membership.membership?.id,
+      name: membership.membership?.name,
+      description: membership.membership?.description,
+      autoRenewing: membership.membership?.autoRenewing,
+      duration: membership.membership?.duration,
+      durationUnit: membership.membership?.durationUnit,
+    },
+    freezePolicy: policy,
+    freezeUsage: usage,
+    freezeEligibility: eligibility,
+  };
+}
+
+app.get('/api/health', (_request, response) => {
+  response.json({
+    ok: true,
+    port: PORT,
+    configured: {
+      hasClientId: Boolean(MOMENCE_CLIENT_ID),
+      hasClientSecret: Boolean(MOMENCE_CLIENT_SECRET),
+      hasRedirectUri: Boolean(MOMENCE_REDIRECT_URI),
+      redirectUriIsValid: !MOMENCE_REDIRECT_URI || isValidAbsoluteUrl(MOMENCE_REDIRECT_URI),
+      hasBasicAuth: !isPlaceholderBasicAuth(currentMomenceBasicAuth) || Boolean(MOMENCE_CLIENT_ID && MOMENCE_CLIENT_SECRET),
+      basicAuthIsPlaceholder: isPlaceholderBasicAuth(currentMomenceBasicAuth),
+      hasUsername: Boolean(MOMENCE_API_USERNAME),
+      hasPassword: Boolean(MOMENCE_API_PASSWORD),
+      usesHistoryEndpoint: MOMENCE_USE_HISTORY_ENDPOINT,
+      missingConfig: getMissingMomenceConfig(),
+    },
+  });
+});
+
+app.post('/api/member-lookup', async (request, response, next) => {
+  try {
+    const { firstName, lastName, countryCode, phoneNumber, email } = request.body || {};
+
+    if (!email || !String(email).includes('@')) {
+      throw createHttpError(400, 'Please provide a valid email address.');
+    }
+
+    const membersSearch = await momenceRequest(
+      `/host/members?page=0&pageSize=100&sortOrder=DESC&sortBy=lastSeenAt&query=${encodeURIComponent(email)}`,
+    );
+
+    const members = Array.isArray(membersSearch.payload) ? membersSearch.payload : [];
+    const member = members.find(item => normalizeText(item.email) === normalizeText(email)) || members[0];
+
+    if (!member?.id) {
+      throw createHttpError(404, 'No member was found for that email address.');
+    }
+
+    const [memberDetails, membershipsResponse] = await Promise.all([
+      momenceRequest(`/host/members/${member.id}`),
+      momenceRequest(`/host/members/${member.id}/bought-memberships/active?page=0&pageSize=200&includeFrozen=true`),
+    ]);
+
+    const activeMemberships = Array.isArray(membershipsResponse.payload) ? membershipsResponse.payload : [];
+    const membershipViews = await Promise.all(
+      activeMemberships.map(async membership => {
+        const usage = await getFreezeUsageSummary(member.id, membership);
+        return serializeMembership(membership, usage);
+      }),
+    );
+
+    response.json({
+      member: memberDetails,
+      verification: buildVerificationSummary(
+        { firstName, lastName, countryCode, phoneNumber, email },
+        memberDetails,
+      ),
+      memberships: membershipViews,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/freeze-membership', async (request, response, next) => {
+  try {
+    const { memberId, boughtMembershipId, startDate, endDate } = request.body || {};
+
+    if (!memberId || !boughtMembershipId) {
+      throw createHttpError(400, 'Member and membership identifiers are required.');
+    }
+
+    if (!startDate || !endDate) {
+      throw createHttpError(400, 'Please provide both freeze start and end dates.');
+    }
+
+    const requestedDays = calculateRequestedFreezeDays(startDate, endDate);
+
+    const membershipsResponse = await momenceRequest(
+      `/host/members/${memberId}/bought-memberships/active?page=0&pageSize=200&includeFrozen=true`,
+    );
+    const memberships = Array.isArray(membershipsResponse.payload) ? membershipsResponse.payload : [];
+    const selectedMembership = memberships.find(item => String(item.id) === String(boughtMembershipId));
+
+    if (!selectedMembership) {
+      throw createHttpError(404, 'The selected active membership could not be found.');
+    }
+
+    const policy = getFreezePolicy(selectedMembership.membership?.name);
+    const usage = await getFreezeUsageSummary(memberId, selectedMembership);
+    const eligibility = evaluateFreezeEligibility({
+      membership: selectedMembership,
+      policy,
+      usage,
+      requestedDays,
+    });
+
+    if (!eligibility.eligible) {
+      throw createHttpError(400, eligibility.reason, {
+        membershipName: selectedMembership.membership?.name,
+        requestedDays,
+        usage,
+        policy,
+      });
+    }
+
+    const scheduledWindow = toScheduledFreezeWindow(startDate, endDate);
+    const freezeResponse = await momenceRequest(
+      `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-freeze`,
+      {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          freezeType: 'scheduled',
+          unfreezeType: 'scheduled',
+          freezeAt: scheduledWindow.freezeAt,
+          unfreezeAt: scheduledWindow.unfreezeAt,
+        }),
+      },
+    );
+
+    response.json({
+      ok: true,
+      message: 'Membership frozen successfully. Goodbye and take care! 👋',
+      memberId,
+      boughtMembershipId,
+      membershipName: selectedMembership.membership?.name,
+      requestedDays,
+      freezeWindow: scheduledWindow,
+      policy,
+      usage,
+      eligibility,
+      apiResponse: freezeResponse,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use((error, _request, response, _next) => {
+  const status = error.status || 500;
+  response.status(status).json({
+    error: error.message || 'Something went wrong.',
+    details: error.details || null,
+  });
+});
+
+app.get('*', (_request, response) => {
+  response.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+if (!IS_VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Freeze Concierge is running on http://localhost:${PORT}`);
+  });
+}
+
+export default app;
