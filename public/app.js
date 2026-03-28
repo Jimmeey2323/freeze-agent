@@ -52,6 +52,15 @@ function apiUrl(pathname) {
   return `${API_BASE_URL}${pathname}`;
 }
 
+function formatDateForApi(value) {
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  return new Date(timestamp).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
 function parseDateOnly(value) {
   const timestamp = Date.parse(`${value}T00:00:00.000Z`);
   return Number.isFinite(timestamp) ? timestamp : Number.NaN;
@@ -289,8 +298,15 @@ async function handleFreeze(event) {
   }
 
   const requestedDays = calculateRequestedDays(startDateInput.value, endDateInput.value);
+  const startDateForApi = formatDateForApi(startDateInput.value);
+  const endDateForApi = formatDateForApi(endDateInput.value);
 
   if (requestedDays === null) {
+    setBanner('Please choose valid freeze dates.', 'error');
+    return;
+  }
+
+  if (!startDateForApi || !endDateForApi) {
     setBanner('Please choose valid freeze dates.', 'error');
     return;
   }
@@ -318,8 +334,8 @@ async function handleFreeze(event) {
       body: JSON.stringify({
         memberId: state.member.id,
         boughtMembershipId: state.selectedMembership.id,
-        startDate: startDateInput.value,
-        endDate: endDateInput.value,
+        startDate: startDateForApi,
+        endDate: endDateForApi,
       }),
     });
 

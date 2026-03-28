@@ -207,11 +207,32 @@ function getMissingMomenceConfig() {
 async function parseResponse(response) {
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
-    return response.json();
+    const text = await response.text();
+    return text ? JSON.parse(text) : {};
   }
 
   const text = await response.text();
   return text ? { raw: text } : {};
+}
+
+function parseFreezeDateInput(value, { endOfDay = false } = {}) {
+  const trimmedValue = String(value || '').trim();
+
+  if (!trimmedValue) {
+    return Number.NaN;
+  }
+
+  const hasExplicitTime = trimmedValue.includes('T');
+  const normalizedValue = hasExplicitTime
+    ? trimmedValue
+    : `${trimmedValue}${endOfDay ? 'T23:59:59Z' : 'T00:00:00Z'}`;
+
+  return Date.parse(normalizedValue);
+}
+
+function formatUtcIsoWithoutMilliseconds(value) {
+  const isoString = value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+  return isoString.replace(/\.\d{3}Z$/, 'Z');
 }
 
 async function warmAuthorizeFlow() {
@@ -372,8 +393,8 @@ function getFreezePolicy(membershipName) {
 }
 
 function calculateRequestedFreezeDays(startDate, endDate) {
-  const start = Date.parse(`${startDate}T00:00:00.000Z`);
-  const endExclusive = Date.parse(`${endDate}T00:00:00.000Z`) + MS_PER_DAY;
+  const start = parseFreezeDateInput(startDate);
+  const endExclusive = parseFreezeDateInput(endDate) + MS_PER_DAY;
 
   if (!Number.isFinite(start) || !Number.isFinite(endExclusive)) {
     throw createHttpError(400, 'Please choose valid freeze start and end dates.');
@@ -387,9 +408,16 @@ function calculateRequestedFreezeDays(startDate, endDate) {
 }
 
 function toScheduledFreezeWindow(startDate, endDate) {
+  const freezeAtTimestamp = parseFreezeDateInput(startDate);
+  const unfreezeAtTimestamp = parseFreezeDateInput(endDate);
+
+  if (!Number.isFinite(freezeAtTimestamp) || !Number.isFinite(unfreezeAtTimestamp)) {
+    throw createHttpError(400, 'Please choose valid freeze start and end dates.');
+  }
+
   return {
-    freezeAt: new Date(`${startDate}T00:00:00.000Z`).toISOString(),
-    unfreezeAt: new Date(`${endDate}T23:59:59.999Z`).toISOString(),
+    freezeAt: formatUtcIsoWithoutMilliseconds(freezeAtTimestamp),
+    unfreezeAt: formatUtcIsoWithoutMilliseconds(unfreezeAtTimestamp),
   };
 }
 
