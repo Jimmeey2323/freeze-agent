@@ -1,18 +1,18 @@
 :root {
   color-scheme: light;
-  --bg: #f6f2eb;
-  --bg-elevated: rgba(255, 255, 255, 0.84);
-  --panel: rgba(252, 248, 243, 0.96);
+  --bg: #eef2f6;
+  --bg-elevated: rgba(255, 255, 255, 0.88);
+  --panel: rgba(253, 254, 255, 0.96);
   --panel-strong: rgba(255, 255, 255, 0.98);
-  --border: rgba(118, 92, 64, 0.14);
-  --text: #241c16;
-  --muted: #786a5e;
-  --accent: #8b5e34;
-  --accent-strong: #c2874b;
+  --border: rgba(59, 88, 128, 0.14);
+  --text: #132033;
+  --muted: #617088;
+  --accent: #1e4f95;
+  --accent-strong: #3672c9;
   --success: #1f8f63;
-  --warning: #b07b1f;
+  --warning: #b67a17;
   --danger: #c05252;
-  --shadow: 0 24px 70px rgba(88, 60, 33, 0.12);
+  --shadow: 0 24px 70px rgba(25, 46, 79, 0.11);
   --radius-xl: 28px;
   --radius-lg: 20px;
   --radius-md: 14px;
@@ -28,9 +28,9 @@ body {
   min-height: 100%;
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(255, 222, 195, 0.85), transparent 26%),
-    radial-gradient(circle at top right, rgba(255, 244, 221, 0.85), transparent 28%),
-    linear-gradient(180deg, #fffdfa 0%, #f6f1ea 100%);
+    radial-gradient(circle at top left, rgba(188, 212, 245, 0.52), transparent 28%),
+    radial-gradient(circle at top right, rgba(230, 236, 245, 0.92), transparent 30%),
+    linear-gradient(180deg, #f9fbfd 0%, #eef2f6 100%);
   color: var(--text);
 }
 
@@ -42,8 +42,8 @@ body {
 .background-grid {
   position: fixed;
   inset: 0;
-  background-image: linear-gradient(rgba(140,98,57,0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(140,98,57,0.04) 1px, transparent 1px);
+  background-image: linear-gradient(rgba(49, 79, 126, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(49, 79, 126, 0.04) 1px, transparent 1px);
   background-size: 48px 48px;
   mask-image: linear-gradient(to bottom, rgba(0,0,0,0.35), transparent 85%);
   pointer-events: none;
@@ -60,7 +60,7 @@ body {
 .orb-one {
   width: 340px;
   height: 340px;
-  background: linear-gradient(135deg, rgba(214, 166, 107, 0.65), rgba(255, 235, 207, 0.3));
+  background: linear-gradient(135deg, rgba(65, 122, 209, 0.34), rgba(229, 239, 255, 0.22));
   top: -80px;
   right: -60px;
 }
@@ -68,7 +68,7 @@ body {
 .orb-two {
   width: 280px;
   height: 280px;
-  background: linear-gradient(135deg, rgba(232, 209, 179, 0.7), rgba(255, 250, 240, 0.25));
+  background: linear-gradient(135deg, rgba(210, 220, 236, 0.78), rgba(250, 252, 255, 0.25));
   bottom: 10%;
   left: -90px;
 }
@@ -100,7 +100,7 @@ body {
   display: grid;
   gap: 12px;
   padding-top: 6px;
-  border-top: 1px solid rgba(118, 92, 64, 0.08);
+  border-top: 1px solid rgba(59, 88, 128, 0.08);
 }
 
 .operation-heading {
@@ -119,8 +119,8 @@ body {
 
 .mode-tab {
   appearance: none;
-  border: 1px solid rgba(118, 92, 64, 0.12);
-  background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248, 241, 234, 0.94));
+  border: 1px solid rgba(59, 88, 128, 0.12);
+  background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(243, 247, 252, 0.95));
   color: var(--text);
   text-align: left;
   padding: 18px;
@@ -135,13 +135,13 @@ body {
 
 .mode-tab:hover {
   transform: translateY(-2px);
-  border-color: rgba(194, 135, 75, 0.35);
+  border-color: rgba(54, 114, 201, 0.34);
 }
 
 .mode-tab.active {
-  border-color: rgba(194, 135, 75, 0.45);
-  background: linear-gradient(180deg, rgba(255, 243, 228, 0.95), rgba(250, 244, 237, 0.92));
-  box-shadow: inset 0 0 0 1px rgba(194, 135, 75, 0.18), 0 12px 26px rgba(160, 114, 66, 0.08);
+  border-color: rgba(54, 114, 201, 0.4);
+  background: linear-gradient(180deg, rgba(238, 245, 255, 0.98), rgba(247, 250, 255, 0.96));
+  box-shadow: inset 0 0 0 1px rgba(54, 114, 201, 0.16), 0 12px 26px rgba(33, 76, 142, 0.08);
 }
 
 .mode-title {
@@ -159,9 +159,9 @@ body {
 
 .operation-chip {
   appearance: none;
-  border: 1px solid rgba(118, 92, 64, 0.12);
+  border: 1px solid rgba(59, 88, 128, 0.12);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.9);
   padding: 16px;
   text-align: left;
   display: grid;
@@ -172,13 +172,13 @@ body {
 
 .operation-chip:hover {
   transform: translateY(-2px);
-  border-color: rgba(194, 135, 75, 0.28);
+  border-color: rgba(54, 114, 201, 0.28);
 }
 
 .operation-chip.active {
-  border-color: rgba(194, 135, 75, 0.42);
-  background: linear-gradient(180deg, rgba(255, 245, 232, 0.98), rgba(251, 244, 236, 0.95));
-  box-shadow: inset 0 0 0 1px rgba(194, 135, 75, 0.16), 0 10px 24px rgba(160, 114, 66, 0.08);
+  border-color: rgba(54, 114, 201, 0.42);
+  background: linear-gradient(180deg, rgba(241, 247, 255, 0.98), rgba(248, 251, 255, 0.96));
+  box-shadow: inset 0 0 0 1px rgba(54, 114, 201, 0.15), 0 10px 24px rgba(33, 76, 142, 0.08);
 }
 
 .operation-chip-title {
@@ -239,7 +239,7 @@ body {
 .hero-accent span {
   padding: 10px 14px;
   border-radius: 999px;
-  background: rgba(133, 102, 71, 0.06);
+  background: rgba(54, 114, 201, 0.07);
   color: var(--muted);
   font-size: 0.86rem;
   font-weight: 600;
@@ -268,15 +268,15 @@ body {
   border-radius: 999px;
   font-size: 0.8rem;
   font-weight: 700;
-  background: rgba(194, 135, 75, 0.12);
+  background: rgba(54, 114, 201, 0.12);
   color: var(--accent);
-  border: 1px solid rgba(194, 135, 75, 0.2);
+  border: 1px solid rgba(54, 114, 201, 0.2);
 }
 
 .badge-soft {
-  background: rgba(133, 102, 71, 0.06);
+  background: rgba(49, 79, 126, 0.06);
   color: var(--text);
-  border-color: rgba(118, 92, 64, 0.12);
+  border-color: rgba(59, 88, 128, 0.12);
 }
 
 .form-grid,
@@ -300,7 +300,7 @@ label span {
 input,
 select {
   width: 100%;
-  border: 1px solid rgba(118, 92, 64, 0.16);
+  border: 1px solid rgba(59, 88, 128, 0.16);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.96);
   color: var(--text);
@@ -316,8 +316,8 @@ input[type="datetime-local"] {
 input:focus,
 select:focus {
   outline: none;
-  border-color: rgba(194, 135, 75, 0.85);
-  box-shadow: 0 0 0 4px rgba(194, 135, 75, 0.12);
+  border-color: rgba(54, 114, 201, 0.82);
+  box-shadow: 0 0 0 4px rgba(54, 114, 201, 0.12);
   transform: translateY(-1px);
 }
 
@@ -360,14 +360,14 @@ select:focus {
 
 .button-primary {
   background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-  color: #fff9f3;
-  box-shadow: 0 16px 30px rgba(194, 135, 75, 0.18);
+  color: #f7fbff;
+  box-shadow: 0 16px 30px rgba(33, 76, 142, 0.2);
 }
 
 .button-secondary {
-  background: rgba(133, 102, 71, 0.07);
+  background: rgba(49, 79, 126, 0.07);
   color: var(--text);
-  border: 1px solid rgba(118, 92, 64, 0.12);
+  border: 1px solid rgba(59, 88, 128, 0.12);
 }
 
 .helper-text {
@@ -412,9 +412,9 @@ select:focus {
   gap: 14px;
   padding: 16px 16px 16px 18px;
   border-radius: 20px;
-  border: 1px solid rgba(118, 92, 64, 0.12);
+  border: 1px solid rgba(59, 88, 128, 0.12);
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 22px 38px rgba(73, 49, 26, 0.16);
+  box-shadow: 0 22px 38px rgba(25, 46, 79, 0.16);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   opacity: 0;
@@ -428,7 +428,7 @@ select:focus {
 }
 
 .toast-info {
-  border-color: rgba(194, 135, 75, 0.22);
+  border-color: rgba(54, 114, 201, 0.24);
 }
 
 .toast-success {
@@ -467,9 +467,9 @@ select:focus {
 }
 
 .feedback-banner.info {
-  background: rgba(194, 135, 75, 0.08);
-  border-color: rgba(194, 135, 75, 0.18);
-  color: #7a552e;
+  background: rgba(54, 114, 201, 0.08);
+  border-color: rgba(54, 114, 201, 0.18);
+  color: #244b87;
 }
 
 .feedback-banner.error {
@@ -496,7 +496,7 @@ select:focus {
 .selected-membership-summary,
 .empty-state-card {
   background: var(--panel);
-  border: 1px solid rgba(118, 92, 64, 0.1);
+  border: 1px solid rgba(59, 88, 128, 0.1);
   border-radius: var(--radius-lg);
 }
 
@@ -540,8 +540,8 @@ select:focus {
 }
 
 .membership-card.selected {
-  border-color: rgba(194, 135, 75, 0.35);
-  box-shadow: inset 0 0 0 1px rgba(194, 135, 75, 0.2), 0 12px 26px rgba(160, 114, 66, 0.08);
+  border-color: rgba(54, 114, 201, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(54, 114, 201, 0.18), 0 12px 26px rgba(33, 76, 142, 0.08);
 }
 
 .membership-title {
@@ -607,7 +607,7 @@ select:focus {
 .success-card {
   text-align: center;
   padding: 30px;
-  background: linear-gradient(180deg, rgba(255, 249, 242, 0.98), rgba(249, 242, 234, 0.94));
+  background: linear-gradient(180deg, rgba(252, 254, 255, 0.98), rgba(243, 248, 255, 0.95));
 }
 
 .success-card h2 {
