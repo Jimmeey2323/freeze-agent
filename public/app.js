@@ -17,7 +17,10 @@ const successDetails = document.querySelector('#success-details');
 const freezeHint = document.querySelector('#freeze-hint');
 const startDateInput = document.querySelector('#startDate');
 const endDateInput = document.querySelector('#endDate');
-const API_BASE_URL = window.location.protocol === 'file:' ? 'http://localhost:3000' : '';
+
+const API_BASE_CANDIDATES = window.location.protocol === 'file:'
+  ? ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003']
+  : ['', 'http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003'];
 
 const state = {
   member: null,
@@ -29,9 +32,7 @@ const state = {
 lookupForm.addEventListener('submit', handleLookup);
 freezeForm.addEventListener('submit', handleFreeze);
 
-if (window.location.protocol === 'file:') {
-  setBanner('You opened the app directly from a file. That causes API URL errors in the browser, so requests will be routed to http://localhost:3000 instead.', 'info');
-}
+const apiBaseUrlPromise = resolveApiBaseUrl();
 
 function setBanner(message, type = 'info') {
   feedbackBanner.textContent = message;
@@ -48,8 +49,36 @@ function toggleBusy(button, busy, busyLabel, idleLabel) {
   button.textContent = busy ? busyLabel : idleLabel;
 }
 
-function apiUrl(pathname) {
-  return `${API_BASE_URL}${pathname}`;
+async function resolveApiBaseUrl() {
+  for (const candidate of API_BASE_CANDIDATES) {
+    try {
+      const response = await fetch(`${candidate}/api/health`);
+      if (response.ok) {
+        if (candidate) {
+          setBanner(`Interface loaded. API requests will use ${candidate}.`, 'info');
+        }
+
+        return candidate;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  if (window.location.protocol === 'file:') {
+    setBanner('The interface opened from a file, but no local API server was found. Start the app server and open http://localhost:3002.', 'error');
+  }
+
+  return '';
+}
+
+async function apiUrl(pathname) {
+  const baseUrl = await apiBaseUrlPromise;
+  return `${baseUrl}${pathname}`;
+}
+
+async function apiFetch(pathname, init) {
+  return fetch(await apiUrl(pathname), init);
 }
 
 function formatDateForApi(value) {
@@ -266,7 +295,7 @@ async function handleLookup(event) {
     toggleBusy(lookupButton, true, 'Finding memberships...', 'Find memberships');
     setBanner('Looking up the member and checking active memberships…', 'info');
 
-    const response = await fetch(apiUrl('/api/member-lookup'), {
+    const response = await apiFetch('/api/member-lookup', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
@@ -350,7 +379,7 @@ async function handleFreeze(event) {
     toggleBusy(freezeButton, true, 'Freezing membership...', 'Freeze membership');
     setBanner('Scheduling the membership freeze with Momence…', 'info');
 
-    const response = await fetch(apiUrl('/api/freeze-membership'), {
+    const response = await apiFetch('/api/freeze-membership', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
