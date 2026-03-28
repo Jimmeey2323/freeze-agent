@@ -52,6 +52,38 @@ function apiUrl(pathname) {
   return `${API_BASE_URL}${pathname}`;
 }
 
+function parseDateOnly(value) {
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(timestamp) ? timestamp : Number.NaN;
+}
+
+function calculateRequestedDays(startDate, endDate) {
+  const start = parseDateOnly(startDate);
+  const end = parseDateOnly(endDate);
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+
+  if (end < start) {
+    return -1;
+  }
+
+  return Math.floor((end - start) / (24 * 60 * 60 * 1000)) + 1;
+}
+
+function getApiErrorMessage(data, fallback) {
+  if (!data || typeof data !== 'object') {
+    return fallback;
+  }
+
+  if (data.error && data.details?.membershipName) {
+    return `${data.error} (${data.details.membershipName})`;
+  }
+
+  return data.error || fallback;
+}
+
 function formatDate(value) {
   if (!value) return '—';
   return new Intl.DateTimeFormat('en-IN', {
@@ -251,6 +283,31 @@ async function handleFreeze(event) {
     return;
   }
 
+  if (!startDateInput.value || !endDateInput.value) {
+    setBanner('Please choose both a freeze start date and end date.', 'error');
+    return;
+  }
+
+  const requestedDays = calculateRequestedDays(startDateInput.value, endDateInput.value);
+
+  if (requestedDays === null) {
+    setBanner('Please choose valid freeze dates.', 'error');
+    return;
+  }
+
+  if (requestedDays < 0) {
+    setBanner('Freeze end date must be the same day or later than the start date.', 'error');
+    return;
+  }
+
+  if (requestedDays > state.selectedMembership.freezeEligibility.daysRemaining) {
+    setBanner(
+      `That range requests ${requestedDays} day(s), but only ${state.selectedMembership.freezeEligibility.daysRemaining} freeze day(s) remain for this membership.`,
+      'error',
+    );
+    return;
+  }
+
   try {
     toggleBusy(freezeButton, true, 'Freezing membership...', 'Freeze membership');
     setBanner('Scheduling the membership freeze with Momence…', 'info');
@@ -268,7 +325,7 @@ async function handleFreeze(event) {
 
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.error || 'Freeze request failed.');
+      throw new Error(getApiErrorMessage(data, 'Freeze request failed.'));
     }
 
     setBanner('Membership freeze scheduled successfully.', 'success');
