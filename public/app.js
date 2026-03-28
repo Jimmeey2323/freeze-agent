@@ -93,6 +93,28 @@ function getApiErrorMessage(data, fallback) {
   return data.error || fallback;
 }
 
+async function readApiResponse(response) {
+  const contentType = response.headers.get('content-type') || '';
+  const rawText = await response.text();
+
+  if (!rawText) {
+    return {};
+  }
+
+  if (contentType.includes('application/json')) {
+    try {
+      return JSON.parse(rawText);
+    } catch {
+      return { error: 'The server returned invalid JSON.', raw: rawText };
+    }
+  }
+
+  return {
+    error: rawText,
+    raw: rawText,
+  };
+}
+
 function formatDate(value) {
   if (!value) return '—';
   return new Intl.DateTimeFormat('en-IN', {
@@ -250,7 +272,7 @@ async function handleLookup(event) {
       body: JSON.stringify(payload),
     });
 
-    const data = await response.json();
+    const data = await readApiResponse(response);
     if (!response.ok) {
       throw new Error(data.error || 'Lookup failed.');
     }
@@ -339,7 +361,7 @@ async function handleFreeze(event) {
       }),
     });
 
-    const data = await response.json();
+    const data = await readApiResponse(response);
     if (!response.ok) {
       throw new Error(getApiErrorMessage(data, 'Freeze request failed.'));
     }
