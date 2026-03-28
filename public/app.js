@@ -384,6 +384,60 @@ function currentOperationConfig() {
   return modeConfig.operations.find(operation => operation.value === operationSelect.value) || modeConfig.operations[0];
 }
 
+function hasScheduledFreeze(membership) {
+  return Boolean(
+    membership.freeze?.scheduledFreezeAt
+    || membership.freeze?.freezeScheduledAt
+    || membership.freeze?.freezeAt,
+  );
+}
+
+function hasScheduledUnfreeze(membership) {
+  return Boolean(
+    membership.freeze?.unfreezedScheduledAt
+    || membership.freeze?.scheduledUnfreezeAt
+    || membership.freeze?.unfreezeScheduledAt,
+  );
+}
+
+function getVisibleMemberships() {
+  const operation = currentOperationConfig().value;
+
+  return state.memberships.filter(membership => {
+    if (state.activeMode === 'freeze') {
+      return Boolean(membership.actions?.canFreeze);
+    }
+
+    if (state.activeMode === 'modify') {
+      if (operation === 'remove-scheduled-unfreeze') {
+        return Boolean(membership.actions?.canRemoveScheduledUnfreeze || hasScheduledUnfreeze(membership));
+      }
+
+      return Boolean(membership.actions?.canModifyFrozen);
+    }
+
+    return Boolean(membership.actions?.canRestartFrozen || membership.isFrozen || hasScheduledFreeze(membership));
+  });
+}
+
+function getEmptyMembershipMessage() {
+  const operation = currentOperationConfig().value;
+
+  if (state.activeMode === 'freeze') {
+    return 'No active memberships are currently eligible for a new freeze request.';
+  }
+
+  if (state.activeMode === 'modify' && operation === 'remove-scheduled-unfreeze') {
+    return 'There are no frozen memberships with a scheduled unfreeze to remove.';
+  }
+
+  if (state.activeMode === 'modify') {
+    return 'There are no frozen memberships available to modify right now.';
+  }
+
+  return 'There are no frozen or scheduled-to-freeze memberships available to restart or remove.';
+}
+
 function populateOperationOptions() {
   const modeConfig = currentModeConfig();
   operationSelect.innerHTML = modeConfig.operations
@@ -414,6 +468,8 @@ function applyOperationUi() {
   if (!operationConfig.showEndDate) {
     endDateInput.value = '';
   }
+
+  schedulerSection.classList.add('hidden');
 
   renderMemberships();
   renderSelectedMembership();
@@ -480,10 +536,22 @@ function renderMemberSummary() {
 }
 
 function renderMemberships() {
-  membershipCount.textContent = `${state.memberships.length} membership${state.memberships.length === 1 ? '' : 's'}`;
+  const visibleMemberships = getVisibleMemberships();
+  membershipCount.textContent = `${visibleMemberships.length} matching membership${visibleMemberships.length === 1 ? '' : 's'}`;
   const operationConfig = currentOperationConfig();
 
-  membershipsGrid.innerHTML = state.memberships.map(membership => {
+  if (!visibleMemberships.length) {
+    membershipsGrid.innerHTML = `
+      <article class="empty-state-card">
+        <span class="label">No matching memberships</span>
+        <strong>${escapeHtml(getEmptyMembershipMessage())}</strong>
+        <p class="helper-text">Try a different top-level flow only if the member's state actually changed. For example: create new freeze for active memberships, modify for currently frozen memberships, restart for frozen or scheduled freezes.</p>
+      </article>
+    `;
+    return;
+  }
+
+  membershipsGrid.innerHTML = visibleMemberships.map(membership => {
     const selected = state.selectedMembership?.id === membership.id;
     const policyText = membership.freezePolicy
       ? `${membership.freezePolicy.attempts} attempts · ${membership.freezePolicy.days} total days`
@@ -546,7 +614,7 @@ function renderSelectedMembership() {
   selectedMembershipSummary.innerHTML = `
     <div class="detail-row"><span>Membership</span><strong>${escapeHtml(membership.membership.name)}</strong></div>
     <div class="detail-row"><span>Location</span><strong>${escapeHtml(membership.location || '—')}</strong></div>
-    <div class="detail-row"><span>Status</span><strong>${escapeHtml(membership.isFrozen ? 'Currently frozen' : 'Active')}</strong></div>
+    <div class="detail-row"><span>Status</span><strong>${escapeHtml(membership.isFrozen ? 'Currently frozen' : hasScheduledFreeze(membership) ? 'Freeze scheduled' : 'Active')}</strong></div>
     <div class="detail-row"><span>Scheduled freeze</span><strong>${escapeHtml(membership.freeze?.scheduledFreezeAt ? formatDate(membership.freeze.scheduledFreezeAt) : '—')}</strong></div>
     <div class="detail-row"><span>Scheduled unfreeze</span><strong>${escapeHtml(membership.freeze?.unfreezedScheduledAt ? formatDate(membership.freeze.unfreezedScheduledAt) : '—')}</strong></div>
     <div class="detail-row"><span>Policy</span><strong>${escapeHtml(`${membership.freezePolicy.attempts} attempts · ${membership.freezePolicy.days} days`)}</strong></div>
@@ -557,7 +625,7 @@ function renderSelectedMembership() {
 }
 
 function selectMembership(membershipId) {
-  state.selectedMembership = state.memberships.find(item => String(item.id) === String(membershipId)) || null;
+  state.selectedMembership = getVisibleMemberships().find(item => String(item.id) === String(membershipId)) || null;
   renderMemberships();
   renderSelectedMembership();
   schedulerSection.classList.remove('hidden');
@@ -599,12 +667,12 @@ async function handleLookup(event) {
     membershipsSection.classList.remove('hidden');
     schedulerSection.classList.add('hidden');
 
-    if (!state.memberships.length) {
-      setBanner('Member found, but there are no memberships available for the selected action.', 'error');
+    if (!getVisibleMemberships().length) {
+      setBanner(getEmptyMembershipMessage(), 'error');
       return;
     }
 
-    setBanner('Member found. Pick a tab, then choose a matching membership to continue.', 'success');
+    setBanner('Member found. The interface is now filtered to the flow you selected, so only relevant memberships are shown.', 'success');
   } catch (error) {
     setBanner(error.message || 'Lookup failed. Please try again.', 'error');
     memberSection.classList.add('hidden');
