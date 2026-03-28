@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import fs from 'fs/promises';
+import { google } from 'googleapis';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -17,6 +18,12 @@ const AUTHORIZE_URL = `${MOMENCE_API_BASE}/auth/authorize`;
 const TOKEN_URL = `${MOMENCE_API_BASE}/auth/token`;
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const MAX_MEMBERSHIP_ACTION_DAYS = 30;
+const ACTIVITY_SPREADSHEET_ID = process.env.ACTIVITY_SPREADSHEET_ID || '1tmrT6ZNWRzWdvG5H31bBLAfTz4nd8G6vMjqRjrsMbLI';
+const ACTIVITY_SHEET_NAME = process.env.ACTIVITY_SHEET_NAME || 'Activity';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN || '';
 
 const MOMENCE_CLIENT_ID = process.env.MOMENCE_CLIENT_ID || '';
 const MOMENCE_CLIENT_SECRET = process.env.MOMENCE_CLIENT_SECRET || '';
@@ -34,6 +41,8 @@ const tokenStore = {
   refreshToken: process.env.MOMENCE_REFRESH_TOKEN || '',
   expiresAt: Number(process.env.MOMENCE_ACCESS_TOKEN_EXPIRES_AT || 0),
 };
+
+let cachedSheetsClient = null;
 
 const FREEZE_POLICY_ROWS = [
   ['Barre 1 month Unlimited', 1, 30],
@@ -99,6 +108,23 @@ function normalizeText(value) {
 
 function normalizePhone(value) {
   return String(value || '').replace(/\D/g, '');
+}
+
+function formatUtcIsoWithoutMilliseconds(value) {
+  const isoString = value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+  return isoString.replace(/\.\d{3}Z$/, 'Z');
+}
+
+function addDaysUtc(value, days) {
+  return formatUtcIsoWithoutMilliseconds(new Date(new Date(value).getTime() + days * MS_PER_DAY));
+}
+
+function formatDateOnlyUtc(value) {
+  return formatUtcIsoWithoutMilliseconds(value).slice(0, 10);
+}
+
+function formatSheetTimestamp(value = new Date()) {
+  return formatUtcIsoWithoutMilliseconds(value).replace('T', ' ');
 }
 
 function escapeEnvValue(value) {
@@ -208,6 +234,78 @@ function getMissingMomenceConfig() {
   return missing;
 }
 
+function isGoogleSheetsLoggingConfigured() {
+  return Boolean(
+    GOOGLE_CLIENT_ID
+      && GOOGLE_CLIENT_SECRET
+      && GOOGLE_REFRESH_TOKEN
+      && ACTIVITY_SPREADSHEET_ID
+      && ACTIVITY_SHEET_NAME,
+  );
+}
+
+async function getSheetsClient() {
+  if (!isGoogleSheetsLoggingConfigured()) {
+    throw createHttpError(500, 'Google Sheets activity logging is not configured.');
+  }
+
+  if (!cachedSheetsClient) {
+    const auth = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET);
+    auth.setCredentials({ refresh_token: GOOGLE_REFRESH_TOKEN });
+    cachedSheetsClient = google.sheets({ version: 'v4', auth });
+  }
+
+  return cachedSheetsClient;
+}
+
+async function appendActivityLog(entry) {
+  const sheets = await getSheetsClient();
+  const row = [
+    formatSheetTimestamp(),
+    entry.status || 'SUCCESS',
+    entry.action || 'unknown',
+    entry.memberId || '',
+    entry.memberName || '',
+    entry.memberEmail || '',
+    entry.boughtMembershipId || '',
+    entry.membershipName || '',
+    entry.location || '',
+    entry.membershipStartDate || '',
+    entry.membershipEndDate || '',
+    entry.freezeHistory || '',
+    entry.freezeEligibility || '',
+    entry.freezeAt || '',
+    entry.unfreezeAt || '',
+    entry.resumeAt || '',
+    entry.requestedDays || '',
+    entry.note || '',
+  ];
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: ACTIVITY_SPREADSHEET_ID,
+    range: `${ACTIVITY_SHEET_NAME}!A:R`,
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: {
+      values: [row],
+    },
+  });
+}
+
+async function appendActivityLogSafe(entry) {
+  try {
+    if (!isGoogleSheetsLoggingConfigured()) {
+      return { logged: false, error: 'Google Sheets logging is not configured.' };
+    }
+
+    await appendActivityLog(entry);
+    return { logged: true, error: null };
+  } catch (error) {
+    console.error('Failed to append activity log:', error);
+    return { logged: false, error: error.message };
+  }
+}
+
 async function parseResponse(response) {
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
@@ -232,11 +330,6 @@ function parseFreezeDateInput(value, { endOfDay = false } = {}) {
     : `${trimmedValue}${endOfDay ? 'T23:59:59Z' : 'T00:00:00Z'}`;
 
   return Date.parse(normalizedValue);
-}
-
-function formatUtcIsoWithoutMilliseconds(value) {
-  const isoString = value instanceof Date ? value.toISOString() : new Date(value).toISOString();
-  return isoString.replace(/\.\d{3}Z$/, 'Z');
 }
 
 async function warmAuthorizeFlow() {
@@ -411,6 +504,32 @@ function calculateRequestedFreezeDays(startDate, endDate) {
   return Math.ceil((endExclusive - start) / MS_PER_DAY);
 }
 
+function calculateScheduledFreezeWindow(startDate, durationDays) {
+  const freezeAtTimestamp = parseFreezeDateInput(startDate);
+  const requestedDays = Number(durationDays);
+
+  if (!Number.isInteger(requestedDays) || requestedDays <= 0) {
+    throw createHttpError(400, 'Please choose a valid freeze duration in days.');
+  }
+
+  if (requestedDays > MAX_MEMBERSHIP_ACTION_DAYS) {
+    throw createHttpError(400, `A membership can only be frozen for up to ${MAX_MEMBERSHIP_ACTION_DAYS} days at a time.`);
+  }
+
+  if (!Number.isFinite(freezeAtTimestamp)) {
+    throw createHttpError(400, 'Please choose a valid freeze start date.');
+  }
+
+  const unfreezeAtTimestamp = freezeAtTimestamp + (requestedDays - 1) * MS_PER_DAY;
+
+  return {
+    requestedDays,
+    freezeAt: formatUtcIsoWithoutMilliseconds(freezeAtTimestamp),
+    unfreezeAt: formatUtcIsoWithoutMilliseconds(unfreezeAtTimestamp),
+    resumeAt: addDaysUtc(unfreezeAtTimestamp, 1),
+  };
+}
+
 function toScheduledFreezeWindow(startDate, endDate) {
   const freezeAtTimestamp = parseFreezeDateInput(startDate);
   const unfreezeAtTimestamp = parseFreezeDateInput(endDate);
@@ -422,6 +541,36 @@ function toScheduledFreezeWindow(startDate, endDate) {
   return {
     freezeAt: formatUtcIsoWithoutMilliseconds(freezeAtTimestamp),
     unfreezeAt: formatUtcIsoWithoutMilliseconds(unfreezeAtTimestamp),
+  };
+}
+
+function calculateScheduledUnfreezeWindow(membership, unfreezeDate) {
+  const unfreezeAtTimestamp = parseFreezeDateInput(unfreezeDate);
+  const freezeStartedAt = membership.freeze?.freezedAt || membership.freeze?.scheduledFreezeAt || formatUtcIsoWithoutMilliseconds(new Date());
+  const freezeStartedTimestamp = parseFreezeDateInput(freezeStartedAt);
+
+  if (!Number.isFinite(unfreezeAtTimestamp)) {
+    throw createHttpError(400, 'Please choose a valid scheduled unfreeze date.');
+  }
+
+  if (!Number.isFinite(freezeStartedTimestamp)) {
+    throw createHttpError(400, 'The membership freeze start date could not be determined.');
+  }
+
+  if (unfreezeAtTimestamp < freezeStartedTimestamp) {
+    throw createHttpError(400, 'Scheduled unfreeze date must be on or after the current freeze date.');
+  }
+
+  const totalFrozenDays = Math.floor((unfreezeAtTimestamp - freezeStartedTimestamp) / MS_PER_DAY) + 1;
+  if (totalFrozenDays > MAX_MEMBERSHIP_ACTION_DAYS) {
+    throw createHttpError(400, `A frozen membership cannot remain frozen for more than ${MAX_MEMBERSHIP_ACTION_DAYS} days.`);
+  }
+
+  return {
+    totalFrozenDays,
+    freezeStartedAt: formatUtcIsoWithoutMilliseconds(freezeStartedTimestamp),
+    unfreezeAt: formatUtcIsoWithoutMilliseconds(unfreezeAtTimestamp),
+    resumeAt: addDaysUtc(unfreezeAtTimestamp, 1),
   };
 }
 
@@ -455,6 +604,32 @@ function buildCurrentFreezeFallback(membership) {
     intervals: [{ freezeAt: freezeStart, unfreezeAt: freezeEnd || null }],
     note: 'Using current membership freeze data as a fallback because full history is not configured.',
   };
+}
+
+function getMembershipLocation(membership) {
+  return (
+    membership.location?.name
+    || membership.location?.title
+    || membership.hostLocation?.name
+    || membership.hostLocation?.title
+    || membership.membership?.location?.name
+    || membership.membership?.location?.title
+    || membership.bookableLocation?.name
+    || membership.bookableLocation?.title
+    || membership.businessLocation?.name
+    || membership.businessLocation?.title
+    || 'Location unavailable'
+  );
+}
+
+function formatFreezeHistorySummary(usage) {
+  if (!usage?.intervals?.length) {
+    return usage?.note || 'No freeze history recorded yet.';
+  }
+
+  return usage.intervals
+    .map(interval => `${formatDateOnlyUtc(interval.freezeAt)} → ${interval.unfreezeAt ? formatDateOnlyUtc(interval.unfreezeAt) : 'Currently frozen'}`)
+    .join(' • ');
 }
 
 function summarizeFreezeHistory(historyEntries, boughtMembershipId) {
@@ -637,6 +812,7 @@ function buildVerificationSummary(submitted, member) {
 function serializeMembership(membership, usage) {
   const policy = getFreezePolicy(membership.membership?.name);
   const eligibility = evaluateFreezeEligibility({ membership, policy, usage });
+  const maxWindowDays = Math.max(0, Math.min(eligibility.daysRemaining, MAX_MEMBERSHIP_ACTION_DAYS));
 
   return {
     id: membership.id,
@@ -648,7 +824,12 @@ function serializeMembership(membership, usage) {
     usageLimitForAppointments: membership.usageLimitForAppointments,
     usedSessions: membership.usedSessions,
     usedAppointments: membership.usedAppointments,
+    location: getMembershipLocation(membership),
     freeze: membership.freeze || null,
+    freezeHistory: {
+      intervals: usage?.intervals || [],
+      summary: formatFreezeHistorySummary(usage),
+    },
     membership: {
       id: membership.membership?.id,
       name: membership.membership?.name,
@@ -659,7 +840,75 @@ function serializeMembership(membership, usage) {
     },
     freezePolicy: policy,
     freezeUsage: usage,
-    freezeEligibility: eligibility,
+    freezeEligibility: {
+      ...eligibility,
+      maxWindowDays,
+    },
+    actions: {
+      canFreeze: eligibility.eligible && !membership.isFrozen,
+      canModifyFrozen: Boolean(membership.isFrozen),
+      canRestartFrozen: Boolean(membership.isFrozen),
+    },
+  };
+}
+
+async function resolveMembershipContext(memberId, boughtMembershipId) {
+  const [memberDetails, membershipsResponse] = await Promise.all([
+    momenceRequest(`/host/members/${memberId}`),
+    momenceRequest(`/host/members/${memberId}/bought-memberships/active?page=0&pageSize=200&includeFrozen=true`),
+  ]);
+
+  const memberships = Array.isArray(membershipsResponse.payload) ? membershipsResponse.payload : [];
+  const selectedMembership = memberships.find(item => String(item.id) === String(boughtMembershipId));
+
+  if (!selectedMembership) {
+    throw createHttpError(404, 'The selected active membership could not be found.');
+  }
+
+  const usage = await getFreezeUsageSummary(memberId, selectedMembership);
+  const membershipView = serializeMembership(selectedMembership, usage);
+
+  return {
+    memberDetails,
+    selectedMembership,
+    membershipView,
+  };
+}
+
+function buildActivityEntry({
+  status,
+  action,
+  memberId,
+  memberContext,
+  memberDetails,
+  membershipView,
+  freezeAt = '',
+  unfreezeAt = '',
+  resumeAt = '',
+  requestedDays = '',
+  note = '',
+}) {
+  const memberName = `${memberContext?.firstName || memberDetails?.firstName || ''} ${memberContext?.lastName || memberDetails?.lastName || ''}`.trim();
+  const memberEmail = memberContext?.email || memberDetails?.email || '';
+
+  return {
+    status,
+    action,
+    memberId,
+    memberName,
+    memberEmail,
+    boughtMembershipId: membershipView?.id || '',
+    membershipName: membershipView?.membership?.name || '',
+    location: membershipView?.location || '',
+    membershipStartDate: membershipView?.startDate ? formatDateOnlyUtc(membershipView.startDate) : '',
+    membershipEndDate: membershipView?.endDate ? formatDateOnlyUtc(membershipView.endDate) : '',
+    freezeHistory: membershipView?.freezeHistory?.summary || '',
+    freezeEligibility: membershipView?.freezeEligibility?.reason || '',
+    freezeAt,
+    unfreezeAt,
+    resumeAt,
+    requestedDays,
+    note,
   };
 }
 
@@ -677,6 +926,7 @@ app.get('/api/health', (_request, response) => {
       hasUsername: Boolean(MOMENCE_API_USERNAME),
       hasPassword: Boolean(MOMENCE_API_PASSWORD),
       usesHistoryEndpoint: MOMENCE_USE_HISTORY_ENDPOINT,
+      activityLoggingConfigured: isGoogleSheetsLoggingConfigured(),
       missingConfig: getMissingMomenceConfig(),
     },
   });
@@ -728,48 +978,54 @@ app.post('/api/member-lookup', async (request, response, next) => {
 });
 
 app.post('/api/freeze-membership', async (request, response, next) => {
+  let activityContext = null;
+
   try {
-    const { memberId, boughtMembershipId, startDate, endDate } = request.body || {};
+    const { memberId, boughtMembershipId, startDate, endDate, durationDays, memberContext } = request.body || {};
 
     if (!memberId || !boughtMembershipId) {
       throw createHttpError(400, 'Member and membership identifiers are required.');
     }
 
-    if (!startDate || !endDate) {
-      throw createHttpError(400, 'Please provide both freeze start and end dates.');
+    if (!startDate) {
+      throw createHttpError(400, 'Please provide a freeze start date.');
     }
 
-    const requestedDays = calculateRequestedFreezeDays(startDate, endDate);
+    const { memberDetails, membershipView } = await resolveMembershipContext(memberId, boughtMembershipId);
+    activityContext = { memberId, memberContext, memberDetails, membershipView };
 
-    const membershipsResponse = await momenceRequest(
-      `/host/members/${memberId}/bought-memberships/active?page=0&pageSize=200&includeFrozen=true`,
-    );
-    const memberships = Array.isArray(membershipsResponse.payload) ? membershipsResponse.payload : [];
-    const selectedMembership = memberships.find(item => String(item.id) === String(boughtMembershipId));
-
-    if (!selectedMembership) {
-      throw createHttpError(404, 'The selected active membership could not be found.');
+    if (membershipView.isFrozen) {
+      throw createHttpError(400, 'This membership is already frozen. Use Modify Existing Frozen Membership or Restart Frozen Membership instead.');
     }
 
-    const policy = getFreezePolicy(selectedMembership.membership?.name);
-    const usage = await getFreezeUsageSummary(memberId, selectedMembership);
+    const scheduledWindow = durationDays
+      ? calculateScheduledFreezeWindow(startDate, durationDays)
+      : {
+        ...toScheduledFreezeWindow(startDate, endDate),
+        requestedDays: calculateRequestedFreezeDays(startDate, endDate),
+        resumeAt: addDaysUtc(parseFreezeDateInput(endDate), 1),
+      };
+
     const eligibility = evaluateFreezeEligibility({
-      membership: selectedMembership,
-      policy,
-      usage,
-      requestedDays,
+      membership: membershipView,
+      policy: membershipView.freezePolicy,
+      usage: membershipView.freezeUsage,
+      requestedDays: scheduledWindow.requestedDays,
     });
 
     if (!eligibility.eligible) {
       throw createHttpError(400, eligibility.reason, {
-        membershipName: selectedMembership.membership?.name,
-        requestedDays,
-        usage,
-        policy,
+        membershipName: membershipView.membership?.name,
+        requestedDays: scheduledWindow.requestedDays,
+        usage: membershipView.freezeUsage,
+        policy: membershipView.freezePolicy,
       });
     }
 
-    const scheduledWindow = toScheduledFreezeWindow(startDate, endDate);
+    if (scheduledWindow.requestedDays > MAX_MEMBERSHIP_ACTION_DAYS) {
+      throw createHttpError(400, `A membership can only be frozen for up to ${MAX_MEMBERSHIP_ACTION_DAYS} days at a time.`);
+    }
+
     const freezeResponse = await momenceRequest(
       `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-freeze`,
       {
@@ -786,20 +1042,209 @@ app.post('/api/freeze-membership', async (request, response, next) => {
       },
     );
 
+    const activityLog = await appendActivityLogSafe(
+      buildActivityEntry({
+        status: 'SUCCESS',
+        action: 'Freeze current membership',
+        memberId,
+        memberContext,
+        memberDetails,
+        membershipView,
+        freezeAt: scheduledWindow.freezeAt,
+        unfreezeAt: scheduledWindow.unfreezeAt,
+        resumeAt: scheduledWindow.resumeAt,
+        requestedDays: scheduledWindow.requestedDays,
+        note: 'Freeze scheduled successfully.',
+      }),
+    );
+
     response.json({
       ok: true,
-      message: 'Membership frozen successfully. Goodbye and take care! 👋',
+      action: 'freeze',
+      message: 'Membership frozen successfully.',
       memberId,
       boughtMembershipId,
-      membershipName: selectedMembership.membership?.name,
-      requestedDays,
+      membershipName: membershipView.membership?.name,
+      requestedDays: scheduledWindow.requestedDays,
       freezeWindow: scheduledWindow,
-      policy,
-      usage,
+      resumeAt: scheduledWindow.resumeAt,
+      policy: membershipView.freezePolicy,
+      usage: membershipView.freezeUsage,
       eligibility,
+      activityLogged: activityLog.logged,
+      activityLogError: activityLog.error,
       apiResponse: freezeResponse,
     });
   } catch (error) {
+    if (activityContext) {
+      await appendActivityLogSafe(
+        buildActivityEntry({
+          status: 'FAILED',
+          action: 'Freeze current membership',
+          memberId: activityContext.memberId,
+          memberContext: activityContext.memberContext,
+          memberDetails: activityContext.memberDetails,
+          membershipView: activityContext.membershipView,
+          note: error.message,
+        }),
+      );
+    }
+
+    next(error);
+  }
+});
+
+app.post('/api/unfreeze-membership', async (request, response, next) => {
+  let activityContext = null;
+
+  try {
+    const { memberId, boughtMembershipId, unfreezeDate, memberContext } = request.body || {};
+
+    if (!memberId || !boughtMembershipId) {
+      throw createHttpError(400, 'Member and membership identifiers are required.');
+    }
+
+    if (!unfreezeDate) {
+      throw createHttpError(400, 'Please provide a scheduled unfreeze date.');
+    }
+
+    const { memberDetails, membershipView } = await resolveMembershipContext(memberId, boughtMembershipId);
+    activityContext = { memberId, memberContext, memberDetails, membershipView };
+
+    if (!membershipView.isFrozen) {
+      throw createHttpError(400, 'This membership is not currently frozen.');
+    }
+
+    const scheduledWindow = calculateScheduledUnfreezeWindow(membershipView, unfreezeDate);
+    const unfreezeResponse = await momenceRequest(
+      `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-schedule-unfreeze`,
+      {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          unfreezeType: 'scheduled',
+          unfreezeAt: scheduledWindow.unfreezeAt,
+        }),
+      },
+    );
+
+    const activityLog = await appendActivityLogSafe(
+      buildActivityEntry({
+        status: 'SUCCESS',
+        action: 'Modify Existing Frozen Membership',
+        memberId,
+        memberContext,
+        memberDetails,
+        membershipView,
+        freezeAt: membershipView.freeze?.freezedAt || membershipView.freeze?.scheduledFreezeAt || '',
+        unfreezeAt: scheduledWindow.unfreezeAt,
+        resumeAt: scheduledWindow.resumeAt,
+        requestedDays: scheduledWindow.totalFrozenDays,
+        note: 'Scheduled unfreeze saved successfully.',
+      }),
+    );
+
+    response.json({
+      ok: true,
+      action: 'modify',
+      message: 'Scheduled unfreeze updated successfully.',
+      memberId,
+      boughtMembershipId,
+      membershipName: membershipView.membership?.name,
+      freezeWindow: {
+        freezeAt: membershipView.freeze?.freezedAt || membershipView.freeze?.scheduledFreezeAt || '',
+        unfreezeAt: scheduledWindow.unfreezeAt,
+      },
+      resumeAt: scheduledWindow.resumeAt,
+      requestedDays: scheduledWindow.totalFrozenDays,
+      activityLogged: activityLog.logged,
+      activityLogError: activityLog.error,
+      apiResponse: unfreezeResponse,
+    });
+  } catch (error) {
+    if (activityContext) {
+      await appendActivityLogSafe(
+        buildActivityEntry({
+          status: 'FAILED',
+          action: 'Modify Existing Frozen Membership',
+          memberId: activityContext.memberId,
+          memberContext: activityContext.memberContext,
+          memberDetails: activityContext.memberDetails,
+          membershipView: activityContext.membershipView,
+          note: error.message,
+        }),
+      );
+    }
+
+    next(error);
+  }
+});
+
+app.post('/api/restart-membership', async (request, response, next) => {
+  let activityContext = null;
+
+  try {
+    const { memberId, boughtMembershipId, memberContext } = request.body || {};
+
+    if (!memberId || !boughtMembershipId) {
+      throw createHttpError(400, 'Member and membership identifiers are required.');
+    }
+
+    const { memberDetails, membershipView } = await resolveMembershipContext(memberId, boughtMembershipId);
+    activityContext = { memberId, memberContext, memberDetails, membershipView };
+
+    if (!membershipView.isFrozen) {
+      throw createHttpError(400, 'This membership is not currently frozen.');
+    }
+
+    const restartResponse = await momenceRequest(
+      `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-schedule-freeze`,
+      {
+        method: 'DELETE',
+      },
+    );
+
+    const activityLog = await appendActivityLogSafe(
+      buildActivityEntry({
+        status: 'SUCCESS',
+        action: 'Restart Frozen Membership',
+        memberId,
+        memberContext,
+        memberDetails,
+        membershipView,
+        freezeAt: membershipView.freeze?.freezedAt || membershipView.freeze?.scheduledFreezeAt || '',
+        note: 'Membership restarted immediately.',
+      }),
+    );
+
+    response.json({
+      ok: true,
+      action: 'restart',
+      message: 'Frozen membership restarted successfully.',
+      memberId,
+      boughtMembershipId,
+      membershipName: membershipView.membership?.name,
+      activityLogged: activityLog.logged,
+      activityLogError: activityLog.error,
+      apiResponse: restartResponse,
+    });
+  } catch (error) {
+    if (activityContext) {
+      await appendActivityLogSafe(
+        buildActivityEntry({
+          status: 'FAILED',
+          action: 'Restart Frozen Membership',
+          memberId: activityContext.memberId,
+          memberContext: activityContext.memberContext,
+          memberDetails: activityContext.memberDetails,
+          membershipView: activityContext.membershipView,
+          note: error.message,
+        }),
+      );
+    }
+
     next(error);
   }
 });
