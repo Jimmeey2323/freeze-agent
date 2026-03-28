@@ -23,6 +23,9 @@ const operationLabel = document.querySelector('#operation-label');
 const operationSelect = document.querySelector('#operationType');
 const modeTabs = Array.from(document.querySelectorAll('.mode-tab'));
 const modePill = document.querySelector('#mode-pill');
+const operationHeading = document.querySelector('#operation-heading');
+const operationPill = document.querySelector('#operation-pill');
+const operationShortcuts = document.querySelector('#operation-shortcuts');
 const membershipsHeading = document.querySelector('#memberships-heading');
 const schedulerHeading = document.querySelector('#scheduler-heading');
 const schedulerBadge = document.querySelector('#scheduler-badge');
@@ -30,6 +33,10 @@ const startDateField = document.querySelector('#startDateField');
 const endDateField = document.querySelector('#endDateField');
 const startDateLabel = document.querySelector('#start-date-label');
 const endDateLabel = document.querySelector('#end-date-label');
+const toastRegion = document.querySelector('#toast-region');
+
+let toastCounter = 0;
+let activeToastTimeout = null;
 
 const API_BASE_CANDIDATES = window.location.protocol === 'file:'
   ? ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003']
@@ -37,22 +44,26 @@ const API_BASE_CANDIDATES = window.location.protocol === 'file:'
 
 const MODE_CONFIG = {
   freeze: {
-    pill: 'Freeze current membership',
-    membershipsHeading: 'Choose a membership to freeze',
-    schedulerHeading: 'Schedule freeze window',
+    pill: 'New freeze request',
+    membershipsHeading: 'Choose membership',
+    schedulerHeading: 'Complete request',
     schedulerBadge: 'Date picker ready',
+    operationHeading: 'Choose freeze request type',
+    operationPill: 'Freeze options',
     operations: [
       {
         value: 'scheduled-window',
         label: 'Schedule freeze + unfreeze',
+        shortLabel: 'Planned freeze window',
+        description: 'Pick a start time and an end time in one request.',
         buttonLabel: 'Schedule freeze',
-        badge: 'Date range required',
-        startLabel: 'Freeze start date',
-        endLabel: 'Freeze end date',
+        badge: 'Start and end time required',
+        startLabel: 'Freeze start date & time',
+        endLabel: 'Freeze end date & time',
         showStartDate: true,
         showEndDate: true,
-        selectionHint: 'Choose an eligible membership above to schedule a freeze window.',
-        activeHint: membership => `You can request up to ${membership.freezeEligibility.daysRemaining} more day(s) across ${membership.freezeEligibility.attemptsRemaining} remaining attempt(s).`,
+        selectionHint: 'Select a membership to continue.',
+        activeHint: membership => `Creating a request for ${membership.membership.name}.`,
         submittingMessage: 'Scheduling the membership freeze with Momence…',
         successBanner: 'Membership freeze scheduled successfully.',
         successTitle: 'Membership freeze scheduled successfully',
@@ -63,14 +74,16 @@ const MODE_CONFIG = {
       {
         value: 'schedule-freeze-only',
         label: 'Schedule freeze only',
+        shortLabel: 'Schedule freeze start',
+        description: 'Choose when the freeze should begin and leave the end open.',
         buttonLabel: 'Schedule freeze only',
-        badge: 'Single date required',
-        startLabel: 'Freeze start date',
-        endLabel: 'Freeze end date',
+        badge: 'Start time required',
+        startLabel: 'Freeze start date & time',
+        endLabel: 'Freeze end date & time',
         showStartDate: true,
         showEndDate: false,
-        selectionHint: 'Choose an eligible membership above to schedule its freeze start date.',
-        activeHint: membership => `This will schedule the freeze start only. ${membership.freezeEligibility.attemptsRemaining} attempt(s) remain for this membership.`,
+        selectionHint: 'Select a membership to continue.',
+        activeHint: membership => `Creating a request for ${membership.membership.name}.`,
         submittingMessage: 'Scheduling the freeze start date with Momence…',
         successBanner: 'Membership freeze scheduled successfully.',
         successTitle: 'Membership freeze scheduled successfully',
@@ -81,14 +94,16 @@ const MODE_CONFIG = {
       {
         value: 'freeze-now',
         label: 'Freeze immediately',
+        shortLabel: 'Freeze right now',
+        description: 'Send an immediate freeze request with no scheduled end.',
         buttonLabel: 'Freeze immediately',
         badge: 'No dates needed',
-        startLabel: 'Freeze start date',
-        endLabel: 'Freeze end date',
+        startLabel: 'Freeze start date & time',
+        endLabel: 'Freeze end date & time',
         showStartDate: false,
         showEndDate: false,
-        selectionHint: 'Choose an eligible membership above to freeze it immediately.',
-        activeHint: membership => `This will freeze the membership right away. ${membership.freezeEligibility.attemptsRemaining} attempt(s) remain for this membership.`,
+        selectionHint: 'Select a membership to continue.',
+        activeHint: membership => `Creating a request for ${membership.membership.name}.`,
         submittingMessage: 'Freezing the membership immediately with Momence…',
         successBanner: 'Membership frozen immediately.',
         successTitle: 'Membership frozen immediately',
@@ -99,14 +114,16 @@ const MODE_CONFIG = {
       {
         value: 'freeze-now-until',
         label: 'Freeze immediately + schedule unfreeze',
+        shortLabel: 'Freeze now, end later',
+        description: 'Freeze now and specify the exact unfreeze time.',
         buttonLabel: 'Freeze now with unfreeze date',
-        badge: 'Single date required',
-        startLabel: 'Scheduled unfreeze date',
-        endLabel: 'Freeze end date',
+        badge: 'Unfreeze time required',
+        startLabel: 'Scheduled unfreeze date & time',
+        endLabel: 'Freeze end date & time',
         showStartDate: true,
         showEndDate: false,
-        selectionHint: 'Choose an eligible membership above to freeze it now and set the unfreeze date.',
-        activeHint: membership => `This will freeze the membership immediately and unfreeze it on the chosen date. ${membership.freezeEligibility.daysRemaining} day(s) remain.`,
+        selectionHint: 'Select a membership to continue.',
+        activeHint: membership => `Creating a request for ${membership.membership.name}.`,
         submittingMessage: 'Freezing the membership now and scheduling the unfreeze…',
         successBanner: 'Membership frozen now with scheduled unfreeze.',
         successTitle: 'Membership frozen now with scheduled unfreeze',
@@ -121,22 +138,26 @@ const MODE_CONFIG = {
     }),
   },
   modify: {
-    pill: 'Modify existing frozen membership',
-    membershipsHeading: 'Choose a frozen membership to modify',
-    schedulerHeading: 'Update scheduled unfreeze date',
-    schedulerBadge: 'Single date required',
+    pill: 'Update frozen membership',
+    membershipsHeading: 'Choose membership',
+    schedulerHeading: 'Update request',
+    schedulerBadge: 'Specific action required',
+    operationHeading: 'Choose frozen membership update',
+    operationPill: 'Update options',
     operations: [
       {
         value: 'schedule-unfreeze',
         label: 'Schedule unfreeze',
+        shortLabel: 'Set unfreeze time',
+        description: 'Choose the exact moment the membership should resume.',
         buttonLabel: 'Save updated unfreeze date',
-        badge: 'Single date required',
-        startLabel: 'Scheduled unfreeze date',
-        endLabel: 'Freeze end date',
+        badge: 'Unfreeze time required',
+        startLabel: 'Scheduled unfreeze date & time',
+        endLabel: 'Freeze end date & time',
         showStartDate: true,
         showEndDate: false,
-        selectionHint: 'Choose a currently frozen membership above to edit its unfreeze date.',
-        activeHint: () => 'Choose the new date when the membership should unfreeze. The resume date will be the next day automatically.',
+        selectionHint: 'Select a frozen membership to continue.',
+        activeHint: membership => `Updating ${membership.membership.name}.`,
         submittingMessage: 'Updating the scheduled unfreeze date with Momence…',
         successBanner: 'Scheduled unfreeze updated successfully.',
         successTitle: 'Frozen membership updated successfully',
@@ -147,14 +168,16 @@ const MODE_CONFIG = {
       {
         value: 'remove-scheduled-unfreeze',
         label: 'Remove scheduled unfreeze',
+        shortLabel: 'Clear unfreeze time',
+        description: 'Keep the membership frozen and remove the planned resume time.',
         buttonLabel: 'Remove scheduled unfreeze',
         badge: 'No dates needed',
-        startLabel: 'Scheduled unfreeze date',
-        endLabel: 'Freeze end date',
+        startLabel: 'Scheduled unfreeze date & time',
+        endLabel: 'Freeze end date & time',
         showStartDate: false,
         showEndDate: false,
-        selectionHint: 'Choose a frozen membership that already has a scheduled unfreeze.',
-        activeHint: () => 'This will delete the scheduled unfreeze and keep the membership frozen.',
+        selectionHint: 'Select a frozen membership to continue.',
+        activeHint: membership => `Updating ${membership.membership.name}.`,
         submittingMessage: 'Removing the scheduled unfreeze with Momence…',
         successBanner: 'Scheduled unfreeze removed successfully.',
         successTitle: 'Scheduled unfreeze removed successfully',
@@ -173,24 +196,26 @@ const MODE_CONFIG = {
     }),
   },
   restart: {
-    pill: 'Restart frozen membership',
-    membershipsHeading: 'Choose a membership to unfreeze or remove scheduled freeze',
-    schedulerHeading: 'Unfreeze or remove scheduled freeze',
+    pill: 'Restart membership',
+    membershipsHeading: 'Choose membership',
+    schedulerHeading: 'Complete request',
     schedulerBadge: 'No dates needed',
+    operationHeading: 'Choose restart action',
+    operationPill: 'Restart options',
     operations: [
       {
         value: 'remove-scheduled-freeze',
         label: 'Unfreeze or remove scheduled freeze',
+        shortLabel: 'Restart or clear freeze',
+        description: 'Immediately restart a frozen membership or cancel a future freeze.',
         buttonLabel: 'Run freeze removal',
         badge: 'No dates needed',
-        startLabel: 'Freeze start date',
-        endLabel: 'Freeze end date',
+        startLabel: 'Freeze start date & time',
+        endLabel: 'Freeze end date & time',
         showStartDate: false,
         showEndDate: false,
-        selectionHint: 'Choose a frozen membership or one that already has a scheduled freeze.',
-        activeHint: membership => membership.isFrozen
-          ? 'This will unfreeze the membership immediately.'
-          : 'This will remove the scheduled freeze before it starts.',
+        selectionHint: 'Select a membership to continue.',
+        activeHint: membership => `Updating ${membership.membership.name}.`,
         submittingMessage: 'Removing the freeze or scheduled freeze with Momence…',
         successBanner: 'Freeze removal completed successfully.',
         successTitle: 'Freeze removal completed successfully',
@@ -230,12 +255,51 @@ setActiveMode(state.activeMode);
 
 function setBanner(message, type = 'info') {
   feedbackBanner.textContent = message;
-  feedbackBanner.className = `feedback-banner ${type}`;
+  feedbackBanner.className = 'feedback-banner hidden';
+
+  if (!message) {
+    return;
+  }
+
+  if (activeToastTimeout) {
+    clearTimeout(activeToastTimeout);
+  }
+
+  const toast = document.createElement('div');
+  const toastId = `toast-${++toastCounter}`;
+  toast.className = `toast toast-${type}`;
+  toast.dataset.toastId = toastId;
+  toast.innerHTML = `
+    <div class="toast-copy">
+      <strong>${type === 'error' ? 'Please check this' : type === 'success' ? 'Done' : 'Notice'}</strong>
+      <span>${escapeHtml(message)}</span>
+    </div>
+    <button type="button" class="toast-close" aria-label="Dismiss notification">×</button>
+  `;
+
+  toast.querySelector('.toast-close')?.addEventListener('click', () => removeToast(toastId));
+  toastRegion.appendChild(toast);
+
+  requestAnimationFrame(() => {
+    toast.classList.add('visible');
+  });
+
+  activeToastTimeout = window.setTimeout(() => removeToast(toastId), type === 'error' ? 7000 : 4200);
 }
 
 function clearBanner() {
   feedbackBanner.className = 'feedback-banner hidden';
   feedbackBanner.textContent = '';
+}
+
+function removeToast(toastId) {
+  const toast = toastRegion.querySelector(`[data-toast-id="${toastId}"]`);
+  if (!toast) {
+    return;
+  }
+
+  toast.classList.remove('visible');
+  window.setTimeout(() => toast.remove(), 180);
 }
 
 function toggleBusy(button, busy, busyLabel, idleLabel) {
@@ -276,7 +340,7 @@ async function apiFetch(pathname, init) {
 }
 
 function formatDateForApi(value) {
-  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) {
     return null;
   }
@@ -285,7 +349,7 @@ function formatDateForApi(value) {
 }
 
 function parseDateOnly(value) {
-  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : Number.NaN;
 }
 
@@ -443,14 +507,43 @@ function populateOperationOptions() {
   operationSelect.innerHTML = modeConfig.operations
     .map(operation => `<option value="${escapeHtml(operation.value)}">${escapeHtml(operation.label)}</option>`)
     .join('');
+
+  renderOperationShortcuts();
+}
+
+function renderOperationShortcuts() {
+  const modeConfig = currentModeConfig();
+  const selectedValue = operationSelect.value || modeConfig.operations[0]?.value;
+
+  operationHeading.textContent = modeConfig.operationHeading;
+  operationPill.textContent = modeConfig.operationPill;
+  operationShortcuts.innerHTML = modeConfig.operations.map(operation => `
+    <button
+      type="button"
+      class="operation-chip ${operation.value === selectedValue ? 'active' : ''}"
+      data-operation-value="${escapeHtml(operation.value)}"
+      role="tab"
+      aria-selected="${String(operation.value === selectedValue)}"
+    >
+      <span class="operation-chip-title">${escapeHtml(operation.shortLabel || operation.label)}</span>
+      <span class="operation-chip-copy">${escapeHtml(operation.description || '')}</span>
+    </button>
+  `).join('');
+
+  operationShortcuts.querySelectorAll('[data-operation-value]').forEach(button => {
+    button.addEventListener('click', () => {
+      operationSelect.value = button.dataset.operationValue;
+      resetSuccessState();
+      state.selectedMembership = null;
+      applyOperationUi();
+    });
+  });
 }
 
 function applyOperationUi() {
   const modeConfig = currentModeConfig();
   const operationConfig = currentOperationConfig();
 
-  operationLabel.textContent = modeConfig === MODE_CONFIG.restart ? 'Action' : 'Action type';
-  operationField.classList.toggle('hidden', modeConfig.operations.length <= 1);
   schedulerBadge.textContent = operationConfig.badge || modeConfig.schedulerBadge;
   successTitle.textContent = operationConfig.successTitle;
   actionButton.textContent = operationConfig.buttonLabel;
@@ -470,6 +563,7 @@ function applyOperationUi() {
   }
 
   schedulerSection.classList.add('hidden');
+  renderOperationShortcuts();
 
   renderMemberships();
   renderSelectedMembership();
@@ -513,24 +607,12 @@ function renderMemberSummary() {
     <article class="summary-card">
       <span class="label">Member</span>
       <strong>${escapeHtml(`${member.firstName || ''} ${member.lastName || ''}`.trim() || '—')}</strong>
-      <div class="helper-text">ID ${escapeHtml(member.id)}</div>
+      <div class="helper-text">${escapeHtml(member.email || '—')}</div>
     </article>
     <article class="summary-card">
-      <span class="label">Email</span>
-      <strong>${escapeHtml(member.email || '—')}</strong>
-      <div class="helper-text">Phone ${escapeHtml(member.phoneNumber || '—')}</div>
-    </article>
-    <article class="summary-card">
-      <span class="label">Seen</span>
-      <strong>${escapeHtml(formatDate(member.lastSeen))}</strong>
-      <div class="helper-text">First seen ${escapeHtml(formatDate(member.firstSeen))}</div>
-    </article>
-    <article class="summary-card">
-      <span class="label">Verification</span>
-      <strong>${verification.firstNameMatches ? 'First name ✓' : 'First name ✕'}</strong>
-      <div class="helper-text">
-        ${verification.lastNameMatches ? 'Last name ✓' : 'Last name ✕'} · ${verification.phoneMatches ? 'Phone ✓' : 'Phone ✕'}
-      </div>
+      <span class="label">Contact</span>
+      <strong>${escapeHtml(member.phoneNumber || '—')}</strong>
+      <div class="helper-text">Member record found</div>
     </article>
   `;
 }
@@ -553,13 +635,13 @@ function renderMemberships() {
 
   membershipsGrid.innerHTML = visibleMemberships.map(membership => {
     const selected = state.selectedMembership?.id === membership.id;
-    const policyText = membership.freezePolicy
-      ? `${membership.freezePolicy.attempts} attempts · ${membership.freezePolicy.days} total days`
-      : 'No configured freeze policy';
-    const usageSource = membership.freezeUsage.available
-      ? membership.freezeUsage.source
-      : 'history unavailable';
     const actionState = currentModeConfig().getActionState(membership, operationConfig);
+    const statusText = membership.isFrozen ? 'Frozen' : hasScheduledFreeze(membership) ? 'Scheduled' : 'Active';
+    const nextEvent = hasScheduledUnfreeze(membership)
+      ? `Unfreezes ${formatDate(membership.freeze?.unfreezedScheduledAt || membership.freeze?.scheduledUnfreezeAt || membership.freeze?.unfreezeScheduledAt)}`
+      : hasScheduledFreeze(membership)
+        ? `Starts ${formatDate(membership.freeze?.scheduledFreezeAt || membership.freeze?.freezeScheduledAt || membership.freeze?.freezeAt)}`
+        : 'Ready for selection';
 
     return `
       <article class="membership-card ${selected ? 'selected' : ''}">
@@ -571,17 +653,12 @@ function renderMemberships() {
         ${getStatusPill(membership.freezeEligibility, membership.isFrozen)}
 
         <div class="membership-meta">
-          <div class="meta-row"><span>Type</span><strong>${escapeHtml(membership.type || '—')}</strong></div>
+          <div class="meta-row"><span>Status</span><strong>${escapeHtml(statusText)}</strong></div>
           <div class="meta-row"><span>Location</span><strong>${escapeHtml(membership.location || '—')}</strong></div>
-          <div class="meta-row"><span>Validity</span><strong>${escapeHtml(formatDate(membership.startDate))} → ${escapeHtml(formatDate(membership.endDate))}</strong></div>
-          <div class="meta-row"><span>Freeze rule</span><strong>${escapeHtml(policyText)}</strong></div>
-          <div class="meta-row"><span>Used so far</span><strong>${escapeHtml(String(membership.freezeUsage.attemptsUsed))} attempts · ${escapeHtml(String(membership.freezeUsage.frozenDaysUsed))} days</strong></div>
-          <div class="meta-row"><span>Remaining</span><strong>${escapeHtml(String(membership.freezeEligibility.attemptsRemaining))} attempts · ${escapeHtml(String(membership.freezeEligibility.daysRemaining))} days</strong></div>
-          <div class="meta-row"><span>Usage source</span><strong>${escapeHtml(usageSource)}</strong></div>
+          <div class="meta-row"><span>Dates</span><strong>${escapeHtml(formatDate(membership.startDate))} → ${escapeHtml(formatDate(membership.endDate))}</strong></div>
         </div>
 
-        <p class="helper-text">${escapeHtml(membership.freezeEligibility.reason)}</p>
-        ${membership.freezeHistory?.summary ? `<p class="helper-text">${escapeHtml(membership.freezeHistory.summary)}</p>` : ''}
+        <p class="membership-subnote">${escapeHtml(nextEvent)}</p>
 
         <button
           class="button ${actionState.available ? 'button-primary' : 'button-secondary'}"
@@ -617,10 +694,6 @@ function renderSelectedMembership() {
     <div class="detail-row"><span>Status</span><strong>${escapeHtml(membership.isFrozen ? 'Currently frozen' : hasScheduledFreeze(membership) ? 'Freeze scheduled' : 'Active')}</strong></div>
     <div class="detail-row"><span>Scheduled freeze</span><strong>${escapeHtml(membership.freeze?.scheduledFreezeAt ? formatDate(membership.freeze.scheduledFreezeAt) : '—')}</strong></div>
     <div class="detail-row"><span>Scheduled unfreeze</span><strong>${escapeHtml(membership.freeze?.unfreezedScheduledAt ? formatDate(membership.freeze.unfreezedScheduledAt) : '—')}</strong></div>
-    <div class="detail-row"><span>Policy</span><strong>${escapeHtml(`${membership.freezePolicy.attempts} attempts · ${membership.freezePolicy.days} days`)}</strong></div>
-    <div class="detail-row"><span>Already used</span><strong>${escapeHtml(`${membership.freezeUsage.attemptsUsed} attempts · ${membership.freezeUsage.frozenDaysUsed} days`)}</strong></div>
-    <div class="detail-row"><span>Still available</span><strong>${escapeHtml(`${membership.freezeEligibility.attemptsRemaining} attempts · ${membership.freezeEligibility.daysRemaining} days`)}</strong></div>
-    <div class="detail-row"><span>Freeze history</span><strong>${escapeHtml(membership.freezeHistory?.summary || 'No freeze history yet')}</strong></div>
   `;
 }
 
@@ -672,7 +745,7 @@ async function handleLookup(event) {
       return;
     }
 
-    setBanner('Member found. The interface is now filtered to the flow you selected, so only relevant memberships are shown.', 'success');
+      setBanner('Member found. Choose the exact action at the top, then select a matching membership below.', 'success');
   } catch (error) {
     setBanner(error.message || 'Lookup failed. Please try again.', 'error');
     memberSection.classList.add('hidden');
@@ -757,6 +830,11 @@ async function handleFreezeAction() {
         startDate: startDateForApi,
         endDate: endDateForApi,
         unfreezeDate: operation === 'freeze-now-until' ? startDateForApi : null,
+        memberContext: {
+          firstName: state.member.firstName,
+          lastName: state.member.lastName,
+          email: state.member.email,
+        },
       }),
     });
 
@@ -795,6 +873,11 @@ async function handleModifyAction() {
         boughtMembershipId: state.selectedMembership.id,
         operation,
         unfreezeDate,
+        memberContext: {
+          firstName: state.member.firstName,
+          lastName: state.member.lastName,
+          email: state.member.email,
+        },
       }),
     });
 
@@ -824,6 +907,11 @@ async function handleRestartAction() {
       body: JSON.stringify({
         memberId: state.member.id,
         boughtMembershipId: state.selectedMembership.id,
+        memberContext: {
+          firstName: state.member.firstName,
+          lastName: state.member.lastName,
+          email: state.member.email,
+        },
       }),
     });
 
@@ -861,16 +949,11 @@ function renderSuccess(data, operationConfig) {
   successTitle.textContent = operationConfig.successTitle;
   successMessage.textContent = data.message;
 
-  const actionValue = Number.isFinite(data.requestedDays)
-    ? `${data.requestedDays} day(s)`
-    : operationConfig.secondaryFallback;
   const windowValue = formatSuccessWindow(data.freezeWindow, operationConfig.secondaryFallback);
 
   successDetails.innerHTML = `
-    <div class="detail-row"><span>Member</span><strong>${escapeHtml(`${state.member.firstName} ${state.member.lastName}`)}</strong></div>
     <div class="detail-row"><span>Membership</span><strong>${escapeHtml(data.membershipName)}</strong></div>
     <div class="detail-row"><span>${escapeHtml(operationConfig.summaryLabel)}</span><strong>${escapeHtml(windowValue)}</strong></div>
-    <div class="detail-row"><span>${escapeHtml(operationConfig.secondaryLabel)}</span><strong>${escapeHtml(actionValue)}</strong></div>
     ${data.resumeAt ? `<div class="detail-row"><span>Resume date</span><strong>${escapeHtml(formatDate(data.resumeAt))}</strong></div>` : ''}
   `;
 

@@ -21,26 +21,16 @@
     <main class="shell">
       <section class="hero card">
         <div>
-          <p class="eyebrow">Smart membership operations</p>
+          <p class="eyebrow">Membership desk</p>
           <h1>Freeze Concierge</h1>
           <p class="lede">
-            A modern membership-freeze console that verifies member details, looks up active memberships,
-            checks freeze allowances, and schedules the freeze in a guided flow.
+            A refined form experience for creating, updating, or clearing membership freeze requests.
           </p>
         </div>
-        <div class="hero-stats">
-          <div>
-            <span class="stat-label">Lookup flow</span>
-            <strong>Email → member → memberships</strong>
-          </div>
-          <div>
-            <span class="stat-label">Freeze logic</span>
-            <strong>Policy, attempts, and total days</strong>
-          </div>
-          <div>
-            <span class="stat-label">Execution</span>
-            <strong>Scheduled freeze with automatic token refresh</strong>
-          </div>
+        <div class="hero-accent">
+          <span>Quick member search</span>
+          <span>Filtered action form</span>
+          <span>Clean confirmation</span>
         </div>
       </section>
 
@@ -50,22 +40,31 @@
             <p class="eyebrow">Choose a workflow</p>
             <h2>Membership actions</h2>
           </div>
-          <span id="mode-pill" class="badge">Freeze current membership</span>
+          <span id="mode-pill" class="badge">New freeze request</span>
         </div>
 
         <div class="mode-tabs" role="tablist" aria-label="Membership actions">
           <button type="button" class="mode-tab active" data-mode="freeze" role="tab" aria-selected="true">
-            <span class="mode-title">Freeze current membership</span>
-            <span class="mode-copy">Schedule a new freeze window for an eligible active membership.</span>
+            <span class="mode-title">Create freeze request</span>
           </button>
           <button type="button" class="mode-tab" data-mode="modify" role="tab" aria-selected="false">
-            <span class="mode-title">Modify existing frozen membership</span>
-            <span class="mode-copy">Adjust the scheduled unfreeze date for a currently frozen membership.</span>
+            <span class="mode-title">Manage frozen membership</span>
           </button>
           <button type="button" class="mode-tab" data-mode="restart" role="tab" aria-selected="false">
-            <span class="mode-title">Restart frozen membership</span>
-            <span class="mode-copy">End the freeze early and restart a currently frozen membership immediately.</span>
+            <span class="mode-title">Restart or clear freeze</span>
           </button>
+        </div>
+
+        <div class="operation-shortcuts-wrap">
+          <div class="section-heading compact-heading operation-heading">
+            <div>
+              <p class="eyebrow">Specific action</p>
+              <h2 id="operation-heading">Choose request type</h2>
+            </div>
+            <span id="operation-pill" class="badge badge-soft">Tailored options</span>
+          </div>
+
+          <div id="operation-shortcuts" class="operation-shortcuts" role="tablist" aria-label="Specific membership action"></div>
         </div>
       </section>
 
@@ -73,10 +72,10 @@
         <section class="card">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Step 1</p>
-              <h2>Find member account</h2>
+              <p class="eyebrow">Member search</p>
+              <h2>Find member</h2>
             </div>
-            <span class="badge badge-soft">Secure server-side lookup</span>
+            <span class="badge badge-soft">Start here</span>
           </div>
 
           <form id="lookup-form" class="form-grid">
@@ -107,44 +106,20 @@
 
             <div class="full-width form-actions">
               <button id="lookup-button" type="submit" class="button button-primary">Find memberships</button>
-              <p class="helper-text">
-                The email is used for the Momence member lookup. Name and phone are shown back for a quick confidence check.
-              </p>
+              <p class="helper-text">Enter the member details and continue.</p>
             </div>
           </form>
         </section>
-
-        <aside class="card side-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">What this app does</p>
-              <h2>Flow overview</h2>
-            </div>
-          </div>
-
-          <ol class="timeline">
-            <li>Authenticates server-side with Momence and refreshes tokens before use.</li>
-            <li>Looks up the member by email and fetches full member details.</li>
-            <li>Lists active memberships and evaluates freeze eligibility per policy.</li>
-            <li>Lets the member choose dates and schedules a freeze if allowed.</li>
-          </ol>
-
-          <div class="tip-box">
-            <strong>Heads up</strong>
-            <p>
-              Historical freeze usage is most accurate when the optional history endpoint configuration is enabled on the server.
-            </p>
-          </div>
-        </aside>
       </section>
 
       <section id="feedback-banner" class="feedback-banner hidden" aria-live="polite"></section>
+      <div id="toast-region" class="toast-region" aria-live="assertive" aria-atomic="true"></div>
 
       <section id="member-section" class="card hidden">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Step 2</p>
-            <h2>Member and verification summary</h2>
+            <p class="eyebrow">Member</p>
+            <h2>Member details</h2>
           </div>
           <span id="verification-pill" class="badge">Awaiting lookup</span>
         </div>
@@ -154,8 +129,8 @@
       <section id="memberships-section" class="card hidden">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Step 3</p>
-            <h2 id="memberships-heading">Choose a membership to freeze</h2>
+            <p class="eyebrow">Memberships</p>
+            <h2 id="memberships-heading">Choose membership</h2>
           </div>
           <span id="membership-count" class="badge badge-soft">0 memberships</span>
         </div>
@@ -165,8 +140,8 @@
       <section id="scheduler-section" class="card hidden">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Step 4</p>
-            <h2 id="scheduler-heading">Schedule freeze window</h2>
+            <p class="eyebrow">Request</p>
+            <h2 id="scheduler-heading">Complete request</h2>
           </div>
           <span id="scheduler-badge" class="badge badge-soft">Date picker ready</span>
         </div>
@@ -174,19 +149,16 @@
         <div id="selected-membership-summary" class="selected-membership-summary"></div>
 
         <form id="freeze-form" class="freeze-form">
-          <label id="operationField" class="full-width">
-            <span id="operation-label">Action type</span>
-            <select id="operationType" name="operationType"></select>
-          </label>
+          <select id="operationType" name="operationType" class="hidden" aria-hidden="true"></select>
 
           <label id="startDateField">
-            <span id="start-date-label">Freeze start date</span>
-            <input id="startDate" name="startDate" type="date" required />
+            <span id="start-date-label">Freeze start date &amp; time</span>
+            <input id="startDate" name="startDate" type="datetime-local" step="60" required />
           </label>
 
           <label id="endDateField">
-            <span id="end-date-label">Freeze end date</span>
-            <input id="endDate" name="endDate" type="date" required />
+            <span id="end-date-label">Freeze end date &amp; time</span>
+            <input id="endDate" name="endDate" type="datetime-local" step="60" required />
           </label>
 
           <div class="full-width form-actions compact">
@@ -197,11 +169,11 @@
       </section>
 
       <section id="success-section" class="card success-card hidden">
-        <p class="eyebrow">All done</p>
+        <p class="eyebrow">Saved</p>
         <h2 id="success-title">Membership freeze scheduled successfully</h2>
         <p id="success-message" class="success-message"></p>
         <div id="success-details" class="success-details"></div>
-        <div class="goodbye">Goodbye, and have a wonderful day ✨</div>
+        <div class="goodbye">Request completed</div>
       </section>
     </main>
 
