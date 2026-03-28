@@ -110,6 +110,10 @@ function escapeEnvValue(value) {
 }
 
 async function upsertEnvValues(entries) {
+  if (IS_VERCEL) {
+    return;
+  }
+
   let envContents = '';
 
   try {
