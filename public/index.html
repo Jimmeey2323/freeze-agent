@@ -44,6 +44,31 @@
         </div>
       </section>
 
+      <section class="card mode-card">
+        <div class="section-heading compact-heading">
+          <div>
+            <p class="eyebrow">Choose a workflow</p>
+            <h2>Membership actions</h2>
+          </div>
+          <span id="mode-pill" class="badge">Freeze current membership</span>
+        </div>
+
+        <div class="mode-tabs" role="tablist" aria-label="Membership actions">
+          <button type="button" class="mode-tab active" data-mode="freeze" role="tab" aria-selected="true">
+            <span class="mode-title">Freeze current membership</span>
+            <span class="mode-copy">Schedule a new freeze window for an eligible active membership.</span>
+          </button>
+          <button type="button" class="mode-tab" data-mode="modify" role="tab" aria-selected="false">
+            <span class="mode-title">Modify existing frozen membership</span>
+            <span class="mode-copy">Adjust the scheduled unfreeze date for a currently frozen membership.</span>
+          </button>
+          <button type="button" class="mode-tab" data-mode="restart" role="tab" aria-selected="false">
+            <span class="mode-title">Restart frozen membership</span>
+            <span class="mode-copy">End the freeze early and restart a currently frozen membership immediately.</span>
+          </button>
+        </div>
+      </section>
+
       <section class="workspace-grid">
         <section class="card">
           <div class="section-heading">
@@ -130,7 +155,7 @@
         <div class="section-heading">
           <div>
             <p class="eyebrow">Step 3</p>
-            <h2>Choose a membership to freeze</h2>
+            <h2 id="memberships-heading">Choose a membership to freeze</h2>
           </div>
           <span id="membership-count" class="badge badge-soft">0 memberships</span>
         </div>
@@ -141,21 +166,21 @@
         <div class="section-heading">
           <div>
             <p class="eyebrow">Step 4</p>
-            <h2>Schedule freeze window</h2>
+            <h2 id="scheduler-heading">Schedule freeze window</h2>
           </div>
-          <span class="badge badge-soft">Date picker ready</span>
+          <span id="scheduler-badge" class="badge badge-soft">Date picker ready</span>
         </div>
 
         <div id="selected-membership-summary" class="selected-membership-summary"></div>
 
         <form id="freeze-form" class="freeze-form">
-          <label>
-            <span>Freeze start date</span>
+          <label id="startDateField">
+            <span id="start-date-label">Freeze start date</span>
             <input id="startDate" name="startDate" type="date" required />
           </label>
 
-          <label>
-            <span>Freeze end date</span>
+          <label id="endDateField">
+            <span id="end-date-label">Freeze end date</span>
             <input id="endDate" name="endDate" type="date" required />
           </label>
 
@@ -168,7 +193,7 @@
 
       <section id="success-section" class="card success-card hidden">
         <p class="eyebrow">All done</p>
-        <h2>Membership freeze scheduled successfully</h2>
+        <h2 id="success-title">Membership freeze scheduled successfully</h2>
         <p id="success-message" class="success-message"></p>
         <div id="success-details" class="success-details"></div>
         <div class="goodbye">Goodbye, and have a wonderful day ✨</div>

@@ -1,8 +1,8 @@
 const lookupForm = document.querySelector('#lookup-form');
-const freezeForm = document.querySelector('#freeze-form');
+const actionForm = document.querySelector('#freeze-form');
 const feedbackBanner = document.querySelector('#feedback-banner');
 const lookupButton = document.querySelector('#lookup-button');
-const freezeButton = document.querySelector('#freeze-button');
+const actionButton = document.querySelector('#freeze-button');
 const memberSection = document.querySelector('#member-section');
 const membershipsSection = document.querySelector('#memberships-section');
 const schedulerSection = document.querySelector('#scheduler-section');
@@ -12,27 +12,99 @@ const membershipsGrid = document.querySelector('#memberships-grid');
 const membershipCount = document.querySelector('#membership-count');
 const verificationPill = document.querySelector('#verification-pill');
 const selectedMembershipSummary = document.querySelector('#selected-membership-summary');
+const successTitle = document.querySelector('#success-title');
 const successMessage = document.querySelector('#success-message');
 const successDetails = document.querySelector('#success-details');
-const freezeHint = document.querySelector('#freeze-hint');
+const actionHint = document.querySelector('#freeze-hint');
 const startDateInput = document.querySelector('#startDate');
 const endDateInput = document.querySelector('#endDate');
+const modeTabs = Array.from(document.querySelectorAll('.mode-tab'));
+const modePill = document.querySelector('#mode-pill');
+const membershipsHeading = document.querySelector('#memberships-heading');
+const schedulerHeading = document.querySelector('#scheduler-heading');
+const schedulerBadge = document.querySelector('#scheduler-badge');
+const startDateField = document.querySelector('#startDateField');
+const endDateField = document.querySelector('#endDateField');
+const startDateLabel = document.querySelector('#start-date-label');
+const endDateLabel = document.querySelector('#end-date-label');
 
 const API_BASE_CANDIDATES = window.location.protocol === 'file:'
   ? ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003']
   : ['', 'http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003'];
+
+const MODE_CONFIG = {
+  freeze: {
+    pill: 'Freeze current membership',
+    membershipsHeading: 'Choose a membership to freeze',
+    schedulerHeading: 'Schedule freeze window',
+    schedulerBadge: 'Date picker ready',
+    actionLabel: 'Freeze membership',
+    successTitle: 'Membership freeze scheduled successfully',
+    selectionHint: 'Choose an eligible membership above to unlock scheduling.',
+    activeHint: membership => `You can request up to ${membership.freezeEligibility.daysRemaining} more day(s) across ${membership.freezeEligibility.attemptsRemaining} remaining attempt(s).`,
+    startLabel: 'Freeze start date',
+    endLabel: 'Freeze end date',
+    showStartDate: true,
+    showEndDate: true,
+    getActionState: membership => ({
+      available: Boolean(membership.actions?.canFreeze),
+      label: membership.actions?.canFreeze ? 'Select this membership' : 'Unavailable for freeze',
+    }),
+  },
+  modify: {
+    pill: 'Modify existing frozen membership',
+    membershipsHeading: 'Choose a frozen membership to modify',
+    schedulerHeading: 'Update scheduled unfreeze date',
+    schedulerBadge: 'Single date required',
+    actionLabel: 'Save updated unfreeze date',
+    successTitle: 'Frozen membership updated successfully',
+    selectionHint: 'Choose a currently frozen membership above to edit its unfreeze date.',
+    activeHint: () => 'Choose the new date when the membership should unfreeze. The resume date will be the next day automatically.',
+    startLabel: 'Scheduled unfreeze date',
+    endLabel: 'Freeze end date',
+    showStartDate: true,
+    showEndDate: false,
+    getActionState: membership => ({
+      available: Boolean(membership.actions?.canModifyFrozen),
+      label: membership.actions?.canModifyFrozen ? 'Modify this frozen membership' : 'Not currently frozen',
+    }),
+  },
+  restart: {
+    pill: 'Restart frozen membership',
+    membershipsHeading: 'Choose a frozen membership to restart',
+    schedulerHeading: 'Restart membership now',
+    schedulerBadge: 'No dates needed',
+    actionLabel: 'Restart membership now',
+    successTitle: 'Frozen membership restarted successfully',
+    selectionHint: 'Choose a currently frozen membership above to restart it immediately.',
+    activeHint: () => 'This will remove the scheduled freeze and restart the membership immediately.',
+    startLabel: 'Freeze start date',
+    endLabel: 'Freeze end date',
+    showStartDate: false,
+    showEndDate: false,
+    getActionState: membership => ({
+      available: Boolean(membership.actions?.canRestartFrozen),
+      label: membership.actions?.canRestartFrozen ? 'Restart this membership' : 'Not currently frozen',
+    }),
+  },
+};
 
 const state = {
   member: null,
   verification: null,
   memberships: [],
   selectedMembership: null,
+  activeMode: 'freeze',
 };
 
 lookupForm.addEventListener('submit', handleLookup);
-freezeForm.addEventListener('submit', handleFreeze);
+actionForm.addEventListener('submit', handleMembershipAction);
+modeTabs.forEach(tab => {
+  tab.addEventListener('click', () => setActiveMode(tab.dataset.mode));
+});
 
 const apiBaseUrlPromise = resolveApiBaseUrl();
+setActiveMode(state.activeMode);
 
 function setBanner(message, type = 'info') {
   feedbackBanner.textContent = message;
@@ -161,7 +233,11 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function getStatusPill(eligibility) {
+function getStatusPill(eligibility, isFrozen) {
+  if (isFrozen) {
+    return '<span class="status-pill warning">Currently frozen</span>';
+  }
+
   if (eligibility.eligible) {
     return '<span class="status-pill success">Eligible to freeze</span>';
   }
@@ -171,6 +247,58 @@ function getStatusPill(eligibility) {
   }
 
   return '<span class="status-pill danger">Not eligible</span>';
+}
+
+function currentModeConfig() {
+  return MODE_CONFIG[state.activeMode];
+}
+
+function resetSuccessState() {
+  successSection.classList.add('hidden');
+  successMessage.textContent = '';
+  successDetails.innerHTML = '';
+}
+
+function setActiveMode(mode) {
+  if (!MODE_CONFIG[mode]) {
+    return;
+  }
+
+  state.activeMode = mode;
+  state.selectedMembership = null;
+  resetSuccessState();
+
+  const config = currentModeConfig();
+
+  modeTabs.forEach(tab => {
+    const isActive = tab.dataset.mode === mode;
+    tab.classList.toggle('active', isActive);
+    tab.setAttribute('aria-selected', String(isActive));
+  });
+
+  modePill.textContent = config.pill;
+  membershipsHeading.textContent = config.membershipsHeading;
+  schedulerHeading.textContent = config.schedulerHeading;
+  schedulerBadge.textContent = config.schedulerBadge;
+  successTitle.textContent = config.successTitle;
+  actionButton.textContent = config.actionLabel;
+  startDateLabel.textContent = config.startLabel;
+  endDateLabel.textContent = config.endLabel;
+  startDateField.classList.toggle('hidden', !config.showStartDate);
+  endDateField.classList.toggle('hidden', !config.showEndDate);
+  startDateInput.required = config.showStartDate;
+  endDateInput.required = config.showEndDate;
+
+  if (!config.showStartDate) {
+    startDateInput.value = '';
+  }
+
+  if (!config.showEndDate) {
+    endDateInput.value = '';
+  }
+
+  renderMemberships();
+  renderSelectedMembership();
 }
 
 function renderMemberSummary() {
@@ -214,6 +342,7 @@ function renderMemberships() {
     const usageSource = membership.freezeUsage.available
       ? membership.freezeUsage.source
       : 'history unavailable';
+    const actionState = currentModeConfig().getActionState(membership);
 
     return `
       <article class="membership-card ${selected ? 'selected' : ''}">
@@ -222,10 +351,11 @@ function renderMemberships() {
           <strong class="membership-title">${escapeHtml(membership.membership.name || 'Unnamed membership')}</strong>
         </div>
 
-        ${getStatusPill(membership.freezeEligibility)}
+        ${getStatusPill(membership.freezeEligibility, membership.isFrozen)}
 
         <div class="membership-meta">
           <div class="meta-row"><span>Type</span><strong>${escapeHtml(membership.type || '—')}</strong></div>
+          <div class="meta-row"><span>Location</span><strong>${escapeHtml(membership.location || '—')}</strong></div>
           <div class="meta-row"><span>Validity</span><strong>${escapeHtml(formatDate(membership.startDate))} → ${escapeHtml(formatDate(membership.endDate))}</strong></div>
           <div class="meta-row"><span>Freeze rule</span><strong>${escapeHtml(policyText)}</strong></div>
           <div class="meta-row"><span>Used so far</span><strong>${escapeHtml(String(membership.freezeUsage.attemptsUsed))} attempts · ${escapeHtml(String(membership.freezeUsage.frozenDaysUsed))} days</strong></div>
@@ -234,15 +364,15 @@ function renderMemberships() {
         </div>
 
         <p class="helper-text">${escapeHtml(membership.freezeEligibility.reason)}</p>
-        ${membership.freezeUsage.note ? `<p class="helper-text">${escapeHtml(membership.freezeUsage.note)}</p>` : ''}
+        ${membership.freezeHistory?.summary ? `<p class="helper-text">${escapeHtml(membership.freezeHistory.summary)}</p>` : ''}
 
         <button
-          class="button ${membership.freezeEligibility.eligible ? 'button-primary' : 'button-secondary'}"
+          class="button ${actionState.available ? 'button-primary' : 'button-secondary'}"
           type="button"
           data-membership-id="${escapeHtml(membership.id)}"
-          ${membership.freezeEligibility.eligible ? '' : 'disabled'}
+          ${actionState.available ? '' : 'disabled'}
         >
-          ${membership.freezeEligibility.eligible ? 'Select this membership' : 'Unavailable'}
+          ${escapeHtml(actionState.label)}
         </button>
       </article>
     `;
@@ -255,18 +385,22 @@ function renderMemberships() {
 
 function renderSelectedMembership() {
   const membership = state.selectedMembership;
+
   if (!membership) {
     selectedMembershipSummary.innerHTML = '';
-    freezeHint.textContent = 'Choose a membership above to unlock scheduling.';
+    actionHint.textContent = currentModeConfig().selectionHint;
     return;
   }
 
-  freezeHint.textContent = `You can request up to ${membership.freezeEligibility.daysRemaining} more day(s) across ${membership.freezeEligibility.attemptsRemaining} remaining attempt(s).`;
+  actionHint.textContent = currentModeConfig().activeHint(membership);
   selectedMembershipSummary.innerHTML = `
     <div class="detail-row"><span>Membership</span><strong>${escapeHtml(membership.membership.name)}</strong></div>
+    <div class="detail-row"><span>Location</span><strong>${escapeHtml(membership.location || '—')}</strong></div>
+    <div class="detail-row"><span>Status</span><strong>${escapeHtml(membership.isFrozen ? 'Currently frozen' : 'Active')}</strong></div>
     <div class="detail-row"><span>Policy</span><strong>${escapeHtml(`${membership.freezePolicy.attempts} attempts · ${membership.freezePolicy.days} days`)}</strong></div>
     <div class="detail-row"><span>Already used</span><strong>${escapeHtml(`${membership.freezeUsage.attemptsUsed} attempts · ${membership.freezeUsage.frozenDaysUsed} days`)}</strong></div>
     <div class="detail-row"><span>Still available</span><strong>${escapeHtml(`${membership.freezeEligibility.attemptsRemaining} attempts · ${membership.freezeEligibility.daysRemaining} days`)}</strong></div>
+    <div class="detail-row"><span>Freeze history</span><strong>${escapeHtml(membership.freezeHistory?.summary || 'No freeze history yet')}</strong></div>
   `;
 }
 
@@ -276,12 +410,6 @@ function selectMembership(membershipId) {
   renderSelectedMembership();
   schedulerSection.classList.remove('hidden');
   schedulerSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-function resetSuccessState() {
-  successSection.classList.add('hidden');
-  successMessage.textContent = '';
-  successDetails.innerHTML = '';
 }
 
 async function handleLookup(event) {
@@ -320,11 +448,11 @@ async function handleLookup(event) {
     schedulerSection.classList.add('hidden');
 
     if (!state.memberships.length) {
-      setBanner('Member found, but there are no active memberships available to freeze.', 'error');
+      setBanner('Member found, but there are no memberships available for the selected action.', 'error');
       return;
     }
 
-    setBanner('Member found. Review eligibility and select a membership to continue.', 'success');
+    setBanner('Member found. Pick a tab, then choose a matching membership to continue.', 'success');
   } catch (error) {
     setBanner(error.message || 'Lookup failed. Please try again.', 'error');
     memberSection.classList.add('hidden');
@@ -335,14 +463,28 @@ async function handleLookup(event) {
   }
 }
 
-async function handleFreeze(event) {
+async function handleMembershipAction(event) {
   event.preventDefault();
 
   if (!state.selectedMembership) {
-    setBanner('Please select an eligible membership before scheduling a freeze.', 'error');
+    setBanner('Please select a matching membership before continuing.', 'error');
     return;
   }
 
+  if (state.activeMode === 'freeze') {
+    await handleFreezeAction();
+    return;
+  }
+
+  if (state.activeMode === 'modify') {
+    await handleModifyAction();
+    return;
+  }
+
+  await handleRestartAction();
+}
+
+async function handleFreezeAction() {
   if (!startDateInput.value || !endDateInput.value) {
     setBanner('Please choose both a freeze start date and end date.', 'error');
     return;
@@ -352,12 +494,7 @@ async function handleFreeze(event) {
   const startDateForApi = formatDateForApi(startDateInput.value);
   const endDateForApi = formatDateForApi(endDateInput.value);
 
-  if (requestedDays === null) {
-    setBanner('Please choose valid freeze dates.', 'error');
-    return;
-  }
-
-  if (!startDateForApi || !endDateForApi) {
+  if (requestedDays === null || !startDateForApi || !endDateForApi) {
     setBanner('Please choose valid freeze dates.', 'error');
     return;
   }
@@ -368,15 +505,12 @@ async function handleFreeze(event) {
   }
 
   if (requestedDays > state.selectedMembership.freezeEligibility.daysRemaining) {
-    setBanner(
-      `That range requests ${requestedDays} day(s), but only ${state.selectedMembership.freezeEligibility.daysRemaining} freeze day(s) remain for this membership.`,
-      'error',
-    );
+    setBanner(`That range requests ${requestedDays} day(s), but only ${state.selectedMembership.freezeEligibility.daysRemaining} freeze day(s) remain for this membership.`, 'error');
     return;
   }
 
   try {
-    toggleBusy(freezeButton, true, 'Freezing membership...', 'Freeze membership');
+    toggleBusy(actionButton, true, 'Freezing membership...', MODE_CONFIG.freeze.actionLabel);
     setBanner('Scheduling the membership freeze with Momence…', 'info');
 
     const response = await apiFetch('/api/freeze-membership', {
@@ -395,19 +529,109 @@ async function handleFreeze(event) {
       throw new Error(getApiErrorMessage(data, 'Freeze request failed.'));
     }
 
-    setBanner('Membership freeze scheduled successfully.', 'success');
-    successMessage.textContent = data.message;
-    successDetails.innerHTML = `
-      <div class="detail-row"><span>Member</span><strong>${escapeHtml(`${state.member.firstName} ${state.member.lastName}`)}</strong></div>
-      <div class="detail-row"><span>Membership</span><strong>${escapeHtml(data.membershipName)}</strong></div>
-      <div class="detail-row"><span>Freeze window</span><strong>${escapeHtml(formatDate(data.freezeWindow.freezeAt))} → ${escapeHtml(formatDate(data.freezeWindow.unfreezeAt))}</strong></div>
-      <div class="detail-row"><span>Requested duration</span><strong>${escapeHtml(`${data.requestedDays} day(s)`)}</strong></div>
-    `;
-    successSection.classList.remove('hidden');
-    successSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    renderSuccess(data, {
+      banner: 'Membership freeze scheduled successfully.',
+      windowLabel: 'Freeze window',
+      requestedLabel: 'Requested duration',
+      fallbackStatus: '',
+    });
   } catch (error) {
     setBanner(error.message || 'Freeze failed. Please try again.', 'error');
   } finally {
-    toggleBusy(freezeButton, false, 'Freezing membership...', 'Freeze membership');
+    toggleBusy(actionButton, false, 'Freezing membership...', MODE_CONFIG.freeze.actionLabel);
   }
+}
+
+async function handleModifyAction() {
+  const unfreezeDate = formatDateForApi(startDateInput.value);
+
+  if (!startDateInput.value || !unfreezeDate) {
+    setBanner('Please choose a valid scheduled unfreeze date.', 'error');
+    return;
+  }
+
+  try {
+    toggleBusy(actionButton, true, 'Saving updated date...', MODE_CONFIG.modify.actionLabel);
+    setBanner('Updating the scheduled unfreeze date with Momence…', 'info');
+
+    const response = await apiFetch('/api/unfreeze-membership', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        memberId: state.member.id,
+        boughtMembershipId: state.selectedMembership.id,
+        unfreezeDate,
+      }),
+    });
+
+    const data = await readApiResponse(response);
+    if (!response.ok) {
+      throw new Error(getApiErrorMessage(data, 'Update request failed.'));
+    }
+
+    renderSuccess(data, {
+      banner: 'Scheduled unfreeze updated successfully.',
+      windowLabel: 'Updated freeze window',
+      requestedLabel: 'Total frozen duration',
+      fallbackStatus: '',
+    });
+  } catch (error) {
+    setBanner(error.message || 'Update failed. Please try again.', 'error');
+  } finally {
+    toggleBusy(actionButton, false, 'Saving updated date...', MODE_CONFIG.modify.actionLabel);
+  }
+}
+
+async function handleRestartAction() {
+  try {
+    toggleBusy(actionButton, true, 'Restarting membership...', MODE_CONFIG.restart.actionLabel);
+    setBanner('Restarting the frozen membership with Momence…', 'info');
+
+    const response = await apiFetch('/api/restart-membership', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        memberId: state.member.id,
+        boughtMembershipId: state.selectedMembership.id,
+      }),
+    });
+
+    const data = await readApiResponse(response);
+    if (!response.ok) {
+      throw new Error(getApiErrorMessage(data, 'Restart request failed.'));
+    }
+
+    renderSuccess(data, {
+      banner: 'Frozen membership restarted successfully.',
+      windowLabel: 'Status',
+      requestedLabel: 'Action',
+      fallbackStatus: 'Restarted immediately',
+    });
+  } catch (error) {
+    setBanner(error.message || 'Restart failed. Please try again.', 'error');
+  } finally {
+    toggleBusy(actionButton, false, 'Restarting membership...', MODE_CONFIG.restart.actionLabel);
+  }
+}
+
+function renderSuccess(data, { banner, windowLabel, requestedLabel, fallbackStatus }) {
+  setBanner(banner, 'success');
+  successTitle.textContent = currentModeConfig().successTitle;
+  successMessage.textContent = data.message;
+
+  const actionValue = fallbackStatus || `${data.requestedDays} day(s)`;
+  const windowValue = data.freezeWindow
+    ? `${formatDate(data.freezeWindow.freezeAt)} → ${formatDate(data.freezeWindow.unfreezeAt)}`
+    : fallbackStatus;
+
+  successDetails.innerHTML = `
+    <div class="detail-row"><span>Member</span><strong>${escapeHtml(`${state.member.firstName} ${state.member.lastName}`)}</strong></div>
+    <div class="detail-row"><span>Membership</span><strong>${escapeHtml(data.membershipName)}</strong></div>
+    <div class="detail-row"><span>${escapeHtml(windowLabel)}</span><strong>${escapeHtml(windowValue)}</strong></div>
+    <div class="detail-row"><span>${escapeHtml(requestedLabel)}</span><strong>${escapeHtml(actionValue)}</strong></div>
+    ${data.resumeAt ? `<div class="detail-row"><span>Resume date</span><strong>${escapeHtml(formatDate(data.resumeAt))}</strong></div>` : ''}
+  `;
+
+  successSection.classList.remove('hidden');
+  successSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
