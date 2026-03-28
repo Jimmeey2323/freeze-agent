@@ -574,6 +574,51 @@ function calculateScheduledUnfreezeWindow(membership, unfreezeDate) {
   };
 }
 
+function calculateInclusiveDaySpan(startValue, endValue) {
+  const startDayTimestamp = parseFreezeDateInput(formatDateOnlyUtc(startValue));
+  const endDayTimestamp = parseFreezeDateInput(formatDateOnlyUtc(endValue));
+
+  if (!Number.isFinite(startDayTimestamp) || !Number.isFinite(endDayTimestamp)) {
+    throw createHttpError(400, 'Please choose valid membership action dates.');
+  }
+
+  if (endDayTimestamp < startDayTimestamp) {
+    throw createHttpError(400, 'The end date must be the same day or later than the start date.');
+  }
+
+  return Math.floor((endDayTimestamp - startDayTimestamp) / MS_PER_DAY) + 1;
+}
+
+function calculateImmediateFreezeWindow(unfreezeDate) {
+  const freezeAt = formatUtcIsoWithoutMilliseconds(new Date());
+
+  if (!unfreezeDate) {
+    return {
+      requestedDays: null,
+      freezeAt,
+      unfreezeAt: null,
+      resumeAt: null,
+    };
+  }
+
+  const unfreezeAtTimestamp = parseFreezeDateInput(unfreezeDate);
+  if (!Number.isFinite(unfreezeAtTimestamp)) {
+    throw createHttpError(400, 'Please choose a valid scheduled unfreeze date.');
+  }
+
+  const requestedDays = calculateInclusiveDaySpan(freezeAt, unfreezeAtTimestamp);
+  if (requestedDays > MAX_MEMBERSHIP_ACTION_DAYS) {
+    throw createHttpError(400, `A membership can only be frozen for up to ${MAX_MEMBERSHIP_ACTION_DAYS} days at a time.`);
+  }
+
+  return {
+    requestedDays,
+    freezeAt,
+    unfreezeAt: formatUtcIsoWithoutMilliseconds(unfreezeAtTimestamp),
+    resumeAt: addDaysUtc(unfreezeAtTimestamp, 1),
+  };
+}
+
 function buildCurrentFreezeFallback(membership) {
   const freeze = membership.freeze || {};
   const freezeStart = freeze.freezedAt || freeze.scheduledFreezeAt;
@@ -619,6 +664,24 @@ function getMembershipLocation(membership) {
     || membership.businessLocation?.name
     || membership.businessLocation?.title
     || 'Location unavailable'
+  );
+}
+
+function getScheduledFreezeAt(membership) {
+  return (
+    membership.freeze?.scheduledFreezeAt
+    || membership.freeze?.freezeScheduledAt
+    || membership.freeze?.freezeAt
+    || null
+  );
+}
+
+function getScheduledUnfreezeAt(membership) {
+  return (
+    membership.freeze?.unfreezedScheduledAt
+    || membership.freeze?.scheduledUnfreezeAt
+    || membership.freeze?.unfreezeScheduledAt
+    || null
   );
 }
 
@@ -847,7 +910,8 @@ function serializeMembership(membership, usage) {
     actions: {
       canFreeze: eligibility.eligible && !membership.isFrozen,
       canModifyFrozen: Boolean(membership.isFrozen),
-      canRestartFrozen: Boolean(membership.isFrozen),
+      canRestartFrozen: Boolean(membership.isFrozen || getScheduledFreezeAt(membership)),
+      canRemoveScheduledUnfreeze: Boolean(getScheduledUnfreezeAt(membership)),
     },
   };
 }
@@ -981,14 +1045,20 @@ app.post('/api/freeze-membership', async (request, response, next) => {
   let activityContext = null;
 
   try {
-    const { memberId, boughtMembershipId, startDate, endDate, durationDays, memberContext } = request.body || {};
+    const {
+      memberId,
+      boughtMembershipId,
+      startDate,
+      endDate,
+      unfreezeDate,
+      durationDays,
+      memberContext,
+      operation = 'scheduled-window',
+      reason = '',
+    } = request.body || {};
 
     if (!memberId || !boughtMembershipId) {
       throw createHttpError(400, 'Member and membership identifiers are required.');
-    }
-
-    if (!startDate) {
-      throw createHttpError(400, 'Please provide a freeze start date.');
     }
 
     const { memberDetails, membershipView } = await resolveMembershipContext(memberId, boughtMembershipId);
@@ -998,76 +1068,159 @@ app.post('/api/freeze-membership', async (request, response, next) => {
       throw createHttpError(400, 'This membership is already frozen. Use Modify Existing Frozen Membership or Restart Frozen Membership instead.');
     }
 
-    const scheduledWindow = durationDays
-      ? calculateScheduledFreezeWindow(startDate, durationDays)
-      : {
-        ...toScheduledFreezeWindow(startDate, endDate),
-        requestedDays: calculateRequestedFreezeDays(startDate, endDate),
-        resumeAt: addDaysUtc(parseFreezeDateInput(endDate), 1),
-      };
+    let actionLabel = 'Freeze current membership';
+    let successMessage = 'Membership freeze scheduled successfully.';
+    let activityNote = 'Membership action saved successfully.';
+    let freezeWindow = null;
+    let requestPath = '';
+    let requestBody = null;
+
+    switch (operation) {
+      case 'freeze-now': {
+        actionLabel = 'Freeze bought membership immediately';
+        successMessage = 'Membership frozen immediately.';
+        activityNote = 'Membership frozen immediately.';
+        freezeWindow = calculateImmediateFreezeWindow(null);
+        requestPath = `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-freeze`;
+        requestBody = {
+          freezeType: 'now',
+          freezeAt: null,
+          unfreezeType: 'not_set',
+          unfreezeAt: null,
+          reason: reason || null,
+        };
+        break;
+      }
+
+      case 'freeze-now-until': {
+        actionLabel = 'Freeze bought membership immediately or schedule freeze/unfreeze';
+        successMessage = 'Membership frozen now with scheduled unfreeze.';
+        activityNote = 'Membership frozen immediately with scheduled unfreeze.';
+        freezeWindow = calculateImmediateFreezeWindow(unfreezeDate || endDate);
+        requestPath = `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-freeze`;
+        requestBody = {
+          freezeType: 'now',
+          freezeAt: null,
+          unfreezeType: 'scheduled',
+          unfreezeAt: freezeWindow.unfreezeAt,
+          reason: reason || null,
+        };
+        break;
+      }
+
+      case 'schedule-freeze-only': {
+        if (!startDate) {
+          throw createHttpError(400, 'Please provide a freeze start date.');
+        }
+
+        const freezeAtTimestamp = parseFreezeDateInput(startDate);
+        if (!Number.isFinite(freezeAtTimestamp)) {
+          throw createHttpError(400, 'Please choose a valid freeze start date.');
+        }
+
+        actionLabel = 'Schedule bought membership freeze';
+        successMessage = 'Membership freeze scheduled successfully.';
+        activityNote = 'Membership freeze scheduled without an unfreeze date.';
+        freezeWindow = {
+          requestedDays: null,
+          freezeAt: formatUtcIsoWithoutMilliseconds(freezeAtTimestamp),
+          unfreezeAt: null,
+          resumeAt: null,
+        };
+        requestPath = `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-schedule-freeze`;
+        requestBody = {
+          freezeType: 'scheduled',
+          freezeAt: freezeWindow.freezeAt,
+        };
+        break;
+      }
+
+      case 'scheduled-window':
+      default: {
+        if (!startDate) {
+          throw createHttpError(400, 'Please provide a freeze start date.');
+        }
+
+        actionLabel = 'Freeze bought membership immediately or schedule freeze/unfreeze';
+        successMessage = 'Membership freeze scheduled successfully.';
+        activityNote = 'Membership freeze scheduled successfully.';
+        freezeWindow = durationDays
+          ? calculateScheduledFreezeWindow(startDate, durationDays)
+          : {
+            ...toScheduledFreezeWindow(startDate, endDate),
+            requestedDays: calculateRequestedFreezeDays(startDate, endDate),
+            resumeAt: addDaysUtc(parseFreezeDateInput(endDate), 1),
+          };
+        requestPath = `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-freeze`;
+        requestBody = {
+          freezeType: 'scheduled',
+          unfreezeType: 'scheduled',
+          freezeAt: freezeWindow.freezeAt,
+          unfreezeAt: freezeWindow.unfreezeAt,
+          reason: reason || null,
+        };
+        break;
+      }
+    }
 
     const eligibility = evaluateFreezeEligibility({
       membership: membershipView,
       policy: membershipView.freezePolicy,
       usage: membershipView.freezeUsage,
-      requestedDays: scheduledWindow.requestedDays,
+      requestedDays: freezeWindow?.requestedDays ?? null,
     });
 
     if (!eligibility.eligible) {
       throw createHttpError(400, eligibility.reason, {
         membershipName: membershipView.membership?.name,
-        requestedDays: scheduledWindow.requestedDays,
+        requestedDays: freezeWindow?.requestedDays ?? null,
         usage: membershipView.freezeUsage,
         policy: membershipView.freezePolicy,
       });
     }
 
-    if (scheduledWindow.requestedDays > MAX_MEMBERSHIP_ACTION_DAYS) {
+    if ((freezeWindow?.requestedDays ?? 0) > MAX_MEMBERSHIP_ACTION_DAYS) {
       throw createHttpError(400, `A membership can only be frozen for up to ${MAX_MEMBERSHIP_ACTION_DAYS} days at a time.`);
     }
 
     const freezeResponse = await momenceRequest(
-      `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-freeze`,
+      requestPath,
       {
         method: 'PUT',
         headers: {
           'content-type': 'application/json',
         },
-        body: JSON.stringify({
-          freezeType: 'scheduled',
-          unfreezeType: 'scheduled',
-          freezeAt: scheduledWindow.freezeAt,
-          unfreezeAt: scheduledWindow.unfreezeAt,
-        }),
+        body: JSON.stringify(requestBody),
       },
     );
 
     const activityLog = await appendActivityLogSafe(
       buildActivityEntry({
         status: 'SUCCESS',
-        action: 'Freeze current membership',
+        action: actionLabel,
         memberId,
         memberContext,
         memberDetails,
         membershipView,
-        freezeAt: scheduledWindow.freezeAt,
-        unfreezeAt: scheduledWindow.unfreezeAt,
-        resumeAt: scheduledWindow.resumeAt,
-        requestedDays: scheduledWindow.requestedDays,
-        note: 'Freeze scheduled successfully.',
+        freezeAt: freezeWindow?.freezeAt || '',
+        unfreezeAt: freezeWindow?.unfreezeAt || '',
+        resumeAt: freezeWindow?.resumeAt || '',
+        requestedDays: freezeWindow?.requestedDays || '',
+        note: activityNote,
       }),
     );
 
     response.json({
       ok: true,
       action: 'freeze',
-      message: 'Membership frozen successfully.',
+      operation,
+      message: successMessage,
       memberId,
       boughtMembershipId,
       membershipName: membershipView.membership?.name,
-      requestedDays: scheduledWindow.requestedDays,
-      freezeWindow: scheduledWindow,
-      resumeAt: scheduledWindow.resumeAt,
+      requestedDays: freezeWindow?.requestedDays ?? null,
+      freezeWindow,
+      resumeAt: freezeWindow?.resumeAt ?? null,
       policy: membershipView.freezePolicy,
       usage: membershipView.freezeUsage,
       eligibility,
@@ -1080,7 +1233,7 @@ app.post('/api/freeze-membership', async (request, response, next) => {
       await appendActivityLogSafe(
         buildActivityEntry({
           status: 'FAILED',
-          action: 'Freeze current membership',
+          action: 'Bought membership freeze operation',
           memberId: activityContext.memberId,
           memberContext: activityContext.memberContext,
           memberDetails: activityContext.memberDetails,
@@ -1098,14 +1251,16 @@ app.post('/api/unfreeze-membership', async (request, response, next) => {
   let activityContext = null;
 
   try {
-    const { memberId, boughtMembershipId, unfreezeDate, memberContext } = request.body || {};
+    const {
+      memberId,
+      boughtMembershipId,
+      unfreezeDate,
+      memberContext,
+      operation = 'schedule-unfreeze',
+    } = request.body || {};
 
     if (!memberId || !boughtMembershipId) {
       throw createHttpError(400, 'Member and membership identifiers are required.');
-    }
-
-    if (!unfreezeDate) {
-      throw createHttpError(400, 'Please provide a scheduled unfreeze date.');
     }
 
     const { memberDetails, membershipView } = await resolveMembershipContext(memberId, boughtMembershipId);
@@ -1115,10 +1270,40 @@ app.post('/api/unfreeze-membership', async (request, response, next) => {
       throw createHttpError(400, 'This membership is not currently frozen.');
     }
 
-    const scheduledWindow = calculateScheduledUnfreezeWindow(membershipView, unfreezeDate);
-    const unfreezeResponse = await momenceRequest(
-      `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-schedule-unfreeze`,
-      {
+    let actionLabel = 'Schedule bought membership unfreeze';
+    let successMessage = 'Scheduled unfreeze updated successfully.';
+    let activityNote = 'Scheduled unfreeze saved successfully.';
+    let freezeWindow = {
+      freezeAt: membershipView.freeze?.freezedAt || membershipView.freeze?.scheduledFreezeAt || '',
+      unfreezeAt: null,
+    };
+    let requestedDays = null;
+    let resumeAt = null;
+    let momenceInit = { method: 'DELETE' };
+
+    if (operation === 'remove-scheduled-unfreeze') {
+      const scheduledUnfreezeAt = getScheduledUnfreezeAt(membershipView);
+      if (!scheduledUnfreezeAt) {
+        throw createHttpError(400, 'This membership does not have a scheduled unfreeze to remove.');
+      }
+
+      actionLabel = 'Remove bought membership scheduled unfreeze';
+      successMessage = 'Scheduled unfreeze removed successfully.';
+      activityNote = 'Scheduled unfreeze removed successfully.';
+      freezeWindow.unfreezeAt = null;
+    } else {
+      if (!unfreezeDate) {
+        throw createHttpError(400, 'Please provide a scheduled unfreeze date.');
+      }
+
+      const scheduledWindow = calculateScheduledUnfreezeWindow(membershipView, unfreezeDate);
+      freezeWindow = {
+        freezeAt: membershipView.freeze?.freezedAt || membershipView.freeze?.scheduledFreezeAt || '',
+        unfreezeAt: scheduledWindow.unfreezeAt,
+      };
+      requestedDays = scheduledWindow.totalFrozenDays;
+      resumeAt = scheduledWindow.resumeAt;
+      momenceInit = {
         method: 'PUT',
         headers: {
           'content-type': 'application/json',
@@ -1127,38 +1312,41 @@ app.post('/api/unfreeze-membership', async (request, response, next) => {
           unfreezeType: 'scheduled',
           unfreezeAt: scheduledWindow.unfreezeAt,
         }),
-      },
+      };
+    }
+
+    const unfreezeResponse = await momenceRequest(
+      `/host/members/${memberId}/bought-memberships/${boughtMembershipId}/membership-schedule-unfreeze`,
+      momenceInit,
     );
 
     const activityLog = await appendActivityLogSafe(
       buildActivityEntry({
         status: 'SUCCESS',
-        action: 'Modify Existing Frozen Membership',
+        action: actionLabel,
         memberId,
         memberContext,
         memberDetails,
         membershipView,
-        freezeAt: membershipView.freeze?.freezedAt || membershipView.freeze?.scheduledFreezeAt || '',
-        unfreezeAt: scheduledWindow.unfreezeAt,
-        resumeAt: scheduledWindow.resumeAt,
-        requestedDays: scheduledWindow.totalFrozenDays,
-        note: 'Scheduled unfreeze saved successfully.',
+        freezeAt: freezeWindow.freezeAt,
+        unfreezeAt: freezeWindow.unfreezeAt || '',
+        resumeAt: resumeAt || '',
+        requestedDays: requestedDays || '',
+        note: activityNote,
       }),
     );
 
     response.json({
       ok: true,
       action: 'modify',
-      message: 'Scheduled unfreeze updated successfully.',
+      operation,
+      message: successMessage,
       memberId,
       boughtMembershipId,
       membershipName: membershipView.membership?.name,
-      freezeWindow: {
-        freezeAt: membershipView.freeze?.freezedAt || membershipView.freeze?.scheduledFreezeAt || '',
-        unfreezeAt: scheduledWindow.unfreezeAt,
-      },
-      resumeAt: scheduledWindow.resumeAt,
-      requestedDays: scheduledWindow.totalFrozenDays,
+      freezeWindow,
+      resumeAt,
+      requestedDays,
       activityLogged: activityLog.logged,
       activityLogError: activityLog.error,
       apiResponse: unfreezeResponse,
@@ -1168,7 +1356,7 @@ app.post('/api/unfreeze-membership', async (request, response, next) => {
       await appendActivityLogSafe(
         buildActivityEntry({
           status: 'FAILED',
-          action: 'Modify Existing Frozen Membership',
+          action: 'Bought membership unfreeze operation',
           memberId: activityContext.memberId,
           memberContext: activityContext.memberContext,
           memberDetails: activityContext.memberDetails,
@@ -1195,8 +1383,10 @@ app.post('/api/restart-membership', async (request, response, next) => {
     const { memberDetails, membershipView } = await resolveMembershipContext(memberId, boughtMembershipId);
     activityContext = { memberId, memberContext, memberDetails, membershipView };
 
-    if (!membershipView.isFrozen) {
-      throw createHttpError(400, 'This membership is not currently frozen.');
+    const scheduledFreezeAt = getScheduledFreezeAt(membershipView);
+
+    if (!membershipView.isFrozen && !scheduledFreezeAt) {
+      throw createHttpError(400, 'This membership is neither frozen nor scheduled to freeze.');
     }
 
     const restartResponse = await momenceRequest(
@@ -1209,23 +1399,24 @@ app.post('/api/restart-membership', async (request, response, next) => {
     const activityLog = await appendActivityLogSafe(
       buildActivityEntry({
         status: 'SUCCESS',
-        action: 'Restart Frozen Membership',
+        action: 'Unfreeze bought membership or remove scheduled freeze',
         memberId,
         memberContext,
         memberDetails,
         membershipView,
-        freezeAt: membershipView.freeze?.freezedAt || membershipView.freeze?.scheduledFreezeAt || '',
-        note: 'Membership restarted immediately.',
+        freezeAt: membershipView.freeze?.freezedAt || scheduledFreezeAt || '',
+        note: membershipView.isFrozen ? 'Membership restarted immediately.' : 'Scheduled membership freeze removed successfully.',
       }),
     );
 
     response.json({
       ok: true,
       action: 'restart',
-      message: 'Frozen membership restarted successfully.',
+      message: membershipView.isFrozen ? 'Frozen membership restarted successfully.' : 'Scheduled membership freeze removed successfully.',
       memberId,
       boughtMembershipId,
       membershipName: membershipView.membership?.name,
+      removedScheduledFreeze: !membershipView.isFrozen,
       activityLogged: activityLog.logged,
       activityLogError: activityLog.error,
       apiResponse: restartResponse,
@@ -1235,7 +1426,7 @@ app.post('/api/restart-membership', async (request, response, next) => {
       await appendActivityLogSafe(
         buildActivityEntry({
           status: 'FAILED',
-          action: 'Restart Frozen Membership',
+          action: 'Unfreeze bought membership or remove scheduled freeze',
           memberId: activityContext.memberId,
           memberContext: activityContext.memberContext,
           memberDetails: activityContext.memberDetails,

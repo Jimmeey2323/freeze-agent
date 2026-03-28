@@ -250,7 +250,8 @@ label span {
   font-weight: 600;
 }
 
-input {
+input,
+select {
   width: 100%;
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 16px;
@@ -261,7 +262,8 @@ input {
   transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-input:focus {
+input:focus,
+select:focus {
   outline: none;
   border-color: rgba(119,225,255,0.85);
   box-shadow: 0 0 0 4px rgba(119,225,255,0.15);
